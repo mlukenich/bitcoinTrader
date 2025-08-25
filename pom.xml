@@ -31,15 +31,9 @@
 
         <!-- For parsing JSON responses -->
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-        </dependency>
-
-        <!-- A DIFFERENT, STABLE Alpaca Trading API Library from Maven Central -->
-        <dependency>
-            <groupId>io.github.mainstringargs</groupId>
-            <artifactId>alpaca-java</artifactId>
-            <version>5.0.2</version>
+          <groupId>net.jacobpeterson</groupId>
+          <artifactId>alpaca-java</artifactId>
+          <version>9.1.0</version> </dependency>
         </dependency>
 
         <!-- Reduces boilerplate code -->
