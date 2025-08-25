@@ -3,9 +3,11 @@ package com.example.tradingbot.service;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import net.jacobpeterson.alpaca.AlpacaAPI;
-// CORRECTED import statements for the new library version
+// CORRECTED import statements for library version 10.0.1
 import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderSide;
 import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderTimeInForce;
+import net.jacobpeterson.alpaca.model.util.apitype.enums.EndpointAPIType;
+import net.jacobpeterson.alpaca.rest.exception.AlpacaAPIRequestException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -23,8 +25,7 @@ public class TradingService {
     private String apiKey;
     @Value("${alpaca.api.secret}")
     private String apiSecret;
-    @Value("${alpaca.api.base-url}")
-    private String baseUrl;
+    // The baseUrl is no longer needed as we use the EndpointAPIType enum.
     @Value("${trading.symbol}")
     private String symbol;
     @Value("${trading.short-ma-period}")
@@ -47,29 +48,22 @@ public class TradingService {
     private final RestTemplate restTemplate = new RestTemplate();
     private AlpacaAPI alpacaAPI;
 
-    /**
-     * This method runs after the service is created and properties are injected.
-     * It initializes the Alpaca API client.
-     */
     @PostConstruct
     public void init() {
-        this.alpacaAPI = new AlpacaAPI(apiKey, apiSecret, baseUrl);
+        // CORRECTED INITIALIZATION: Using the EndpointAPIType enum for clarity and stability.
+        this.alpacaAPI = new AlpacaAPI(apiKey, apiSecret, EndpointAPIType.PAPER);
     }
 
     public void executeStrategy() {
         double currentPrice = fetchCurrentBitcoinPrice();
         if (currentPrice == 0.0 && lastKnownPrice != 0.0) {
             currentPrice = lastKnownPrice;
-        } else if (currentPrice == 0.0) {
-            return;
-        }
+        } else if (currentPrice == 0.0) { return; }
 
         priceHistory.add(currentPrice);
         lastKnownPrice = currentPrice;
 
-        if (priceHistory.size() < longMaPeriod) {
-            return;
-        }
+        if (priceHistory.size() < longMaPeriod) { return; }
 
         double shortMA = calculateMovingAverage(shortMaPeriod);
         double longMA = calculateMovingAverage(longMaPeriod);
@@ -95,7 +89,6 @@ public class TradingService {
     private void buy(double currentPrice) {
         System.out.printf("Attempting to place BUY order for $%.2f of %s%n", tradeAmountUsd, symbol);
         try {
-            // Alpaca requires quantity, not notional for crypto, so we calculate it.
             double quantity = tradeAmountUsd / currentPrice;
             alpacaAPI.orders().requestMarketOrder(
                     symbol,
@@ -106,8 +99,9 @@ public class TradingService {
             System.out.println("BUY order placed successfully!");
             inPosition = true;
             purchasePrice = currentPrice;
-        } catch (Exception e) {
+        } catch (AlpacaAPIRequestException e) {
             System.err.println("Error placing BUY order: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -118,8 +112,15 @@ public class TradingService {
             System.out.println("SELL order (close position) placed successfully!");
             inPosition = false;
             purchasePrice = 0.0;
-        } catch (Exception e) {
+        } catch (AlpacaAPIRequestException e) {
             System.err.println("Error placing SELL order: " + e.getMessage());
+            if (!e.getMessage().contains("position not found")) {
+                e.printStackTrace();
+            } else {
+                System.out.println("No position existed to sell. Resetting state.");
+                inPosition = false;
+                purchasePrice = 0.0;
+            }
         }
     }
 
@@ -162,6 +163,5 @@ public class TradingService {
         public void setPriceUsd(String priceUsd) { this.priceUsd = priceUsd; }
     }
 }
-
 
 

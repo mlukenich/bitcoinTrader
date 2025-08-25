@@ -35,7 +35,7 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
-        <!-- Alpaca Trading API Library -->
+        <!-- FINAL CORRECTED dependency from Maven Central -->
         <dependency>
             <groupId>net.jacobpeterson.alpaca</groupId>
             <artifactId>alpaca-java</artifactId>
@@ -57,13 +57,7 @@
         </dependency>
     </dependencies>
 
-    <!-- This repository is required to download the Alpaca library -->
-    <repositories>
-        <repository>
-            <id>jitpack.io</id>
-            <url>https://jitpack.io</url>
-        </repository>
-    </repositories>
+    <!-- The JitPack repository is no longer needed -->
 
     <build>
         <plugins>
@@ -83,5 +77,7 @@
     </build>
 
 </project>
+
+
 
 
