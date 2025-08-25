@@ -2,17 +2,19 @@ package com.example.tradingbot.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-// CORRECTED IMPORTS for the 'io.github.mainstringargs' library
-import io.github.mainstringargs.alpaca.AlpacaAPI;
-import io.github.mainstringargs.alpaca.enums.OrderSide;
-import io.github.mainstringargs.alpaca.enums.OrderTimeInForce;
-import io.github.mainstringargs.alpaca.rest.exception.AlpacaAPIRequestException;
-import io.github.mainstringargs.domain.alpaca.position.Position;
+// --- IMPORTS FOR THE NEW 'net.jacobpeterson' LIBRARY ---
+import net.jacobpeterson.alpaca.Alpaca;
+import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderSide;
+import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderTimeInForce;
+import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderType;
+import net.jacobpeterson.alpaca.model.endpoint.orders.request.MarketOrderRequest;
+import net.jacobpeterson.alpaca.model.endpoint.positions.Position;
+import net.jacobpeterson.alpaca.rest.AlpacaClientException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-
 import jakarta.annotation.PostConstruct;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -20,13 +22,13 @@ import java.util.List;
 @Service
 public class TradingService {
 
-    // --- Injected Configuration Values ---
+    // --- Injected Configuration Values (Unchanged) ---
     @Value("${alpaca.api.key}")
     private String apiKey;
     @Value("${alpaca.api.secret}")
     private String apiSecret;
     @Value("${alpaca.api.base-url}")
-    private String baseUrl;
+    private String baseUrl; // This URL determines paper or live trading
     @Value("${trading.symbol}")
     private String symbol;
     @Value("${trading.short-ma-period}")
@@ -38,7 +40,7 @@ public class TradingService {
     @Value("${trading.stop-loss-percentage}")
     private double stopLossPercentage;
 
-    // --- State Variables ---
+    // --- State Variables (Unchanged) ---
     private final List<Double> priceHistory = Collections.synchronizedList(new ArrayList<>());
     private boolean inPosition = false;
     private double purchasePrice = 0.0;
@@ -47,11 +49,16 @@ public class TradingService {
     private double lastKnownPrice = 0.0;
 
     private final RestTemplate restTemplate = new RestTemplate();
-    private AlpacaAPI alpacaAPI;
+    
+    // --- UPDATED: The new Alpaca client object ---
+    private Alpaca alpaca;
 
     @PostConstruct
     public void init() {
-        this.alpacaAPI = new AlpacaAPI(apiKey, apiSecret, baseUrl);
+        // --- UPDATED: Initialization of the new Alpaca client ---
+        // Note: The new library handles endpoint selection (paper/live) via the URL.
+        // Make sure your baseUrl is correct (e.g., https://paper-api.alpaca.markets)
+        this.alpaca = new Alpaca(apiKey, apiSecret, baseUrl);
     }
 
     public void executeStrategy() {
@@ -89,13 +96,24 @@ public class TradingService {
     private void buy(double currentPrice) {
         System.out.printf("Attempting to place BUY order for $%.2f of %s%n", tradeAmountUsd, symbol);
         try {
-            double quantity = tradeAmountUsd / currentPrice;
-            // This library uses a direct method call for market orders and requires an integer quantity
-            alpacaAPI.requestNewMarketOrder(symbol, (int) Math.floor(quantity), OrderSide.BUY, OrderTimeInForce.GTC, null, null);
+            // --- UPDATED: Building a market order request with the new library ---
+            MarketOrderRequest marketOrderRequest = new MarketOrderRequest(
+                    symbol,
+                    null, // Quantity can be null when using notional value
+                    OrderSide.BUY,
+                    OrderType.MARKET,
+                    OrderTimeInForce.DAY, // GTC (Good 'til Canceled) is often not supported for crypto
+                    null,
+                    null,
+                    tradeAmountUsd, // Use 'notional' for dollar amount buys
+                    null
+            );
+
+            alpaca.orders().requestMarketOrder(marketOrderRequest);
             System.out.println("BUY order placed successfully!");
             inPosition = true;
             purchasePrice = currentPrice;
-        } catch (AlpacaAPIRequestException e) {
+        } catch (AlpacaClientException e) {
             System.err.println("Error placing BUY order: " + e.getMessage());
             e.printStackTrace();
         }
@@ -104,26 +122,37 @@ public class TradingService {
     private void sell() {
         System.out.printf("Attempting to place SELL order for all %s%n", symbol);
         try {
-            // Get the current position to find out the exact quantity to sell.
-            Position position = alpacaAPI.getPosition(symbol);
-            int quantityToSell = position.getQty();
+            // --- UPDATED: Getting the position and creating a SELL order ---
+            Position position = alpaca.positions().getOpenPositionBySymbol(symbol);
+            String quantityToSell = position.getQty(); // The quantity is now a String
 
-            // Submit a SELL order for the entire quantity.
-            alpacaAPI.requestNewMarketOrder(symbol, quantityToSell, OrderSide.SELL, OrderTimeInForce.GTC, null, null);
+            MarketOrderRequest marketOrderRequest = new MarketOrderRequest(
+                    symbol,
+                    quantityToSell, // Provide the exact quantity to sell
+                    OrderSide.SELL,
+                    OrderType.MARKET,
+                    OrderTimeInForce.DAY,
+                    null, null, null, null
+            );
+            
+            alpaca.orders().requestMarketOrder(marketOrderRequest);
             System.out.println("SELL order (to close position) placed successfully!");
             inPosition = false;
             purchasePrice = 0.0;
-        } catch (AlpacaAPIRequestException e) {
+        } catch (AlpacaClientException e) {
             System.err.println("Error placing SELL order: " + e.getMessage());
-            if (e.getMessage().contains("position not found")) {
-                System.out.println("No position existed to sell. Resetting state.");
-                inPosition = false;
-                purchasePrice = 0.0;
+            // This library throws a specific exception when a position is not found
+            if (e.getAPIResponse() != null && e.getAPIResponse().getCode() == 40410000) {
+                 System.out.println("No position existed to sell. Resetting state.");
+                 inPosition = false;
+                 purchasePrice = 0.0;
             } else {
                 e.printStackTrace();
             }
         }
     }
+
+    // --- HELPER METHODS (Unchanged) ---
 
     private void resetMovingAverages(double shortMA, double longMA) {
         this.previousShortMA = shortMA;
@@ -148,6 +177,8 @@ public class TradingService {
         }
         return 0.0;
     }
+
+    // --- DTO CLASSES (Unchanged) ---
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static class CoinCapResponse {
