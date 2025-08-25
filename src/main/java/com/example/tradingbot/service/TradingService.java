@@ -2,35 +2,32 @@ package com.example.tradingbot.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-// --- IMPORTS FOR THE NEW 'net.jacobpeterson' LIBRARY ---
-import net.jacobpeterson.alpaca.Alpaca;
-import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderSide;
-import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderTimeInForce;
-import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderType;
-import net.jacobpeterson.alpaca.model.endpoint.orders.request.MarketOrderRequest;
-import net.jacobpeterson.alpaca.model.endpoint.positions.Position;
-import net.jacobpeterson.alpaca.rest.AlpacaClientException;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import jakarta.annotation.PostConstruct;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 public class TradingService {
 
-    // --- Injected Configuration Values (Unchanged) ---
+    // --- Injected Configuration Values ---
     @Value("${alpaca.api.key}")
     private String apiKey;
     @Value("${alpaca.api.secret}")
     private String apiSecret;
     @Value("${alpaca.api.base-url}")
-    private String baseUrl; // This URL determines paper or live trading
+    private String baseUrl; // e.g., https://paper-api.alpaca.markets
     @Value("${trading.symbol}")
-    private String symbol;
+    private String symbol; // e.g., BTC/USD
     @Value("${trading.short-ma-period}")
     private int shortMaPeriod;
     @Value("${trading.long-ma-period}")
@@ -40,7 +37,7 @@ public class TradingService {
     @Value("${trading.stop-loss-percentage}")
     private double stopLossPercentage;
 
-    // --- State Variables (Unchanged) ---
+    // --- State Variables ---
     private final List<Double> priceHistory = Collections.synchronizedList(new ArrayList<>());
     private boolean inPosition = false;
     private double purchasePrice = 0.0;
@@ -49,18 +46,27 @@ public class TradingService {
     private double lastKnownPrice = 0.0;
 
     private final RestTemplate restTemplate = new RestTemplate();
-    
-    // --- UPDATED: The new Alpaca client object ---
-    private Alpaca alpaca;
+    private HttpHeaders apiHeaders;
 
+    /**
+     * This method runs after the service is created. It initializes the API headers
+     * and synchronizes the bot's state with the actual Alpaca account.
+     */
     @PostConstruct
     public void init() {
-        // --- UPDATED: Initialization of the new Alpaca client ---
-        // Note: The new library handles endpoint selection (paper/live) via the URL.
-        // Make sure your baseUrl is correct (e.g., https://paper-api.alpaca.markets)
-        this.alpaca = new Alpaca(apiKey, apiSecret, baseUrl);
+        // Create reusable headers for all API calls
+        this.apiHeaders = new HttpHeaders();
+        this.apiHeaders.set("APCA-API-KEY-ID", apiKey);
+        this.apiHeaders.set("APCA-API-SECRET-KEY", apiSecret);
+        this.apiHeaders.setContentType(MediaType.APPLICATION_JSON);
+
+        // Synchronize state on startup
+        synchronizePositionState();
     }
 
+    /**
+     * The main trading logic loop.
+     */
     public void executeStrategy() {
         double currentPrice = fetchCurrentBitcoinPrice();
         if (currentPrice == 0.0 && lastKnownPrice != 0.0) {
@@ -69,6 +75,11 @@ public class TradingService {
 
         priceHistory.add(currentPrice);
         lastKnownPrice = currentPrice;
+
+        // Trim the price history to prevent memory leaks
+        while (priceHistory.size() > longMaPeriod) {
+            priceHistory.remove(0);
+        }
 
         if (priceHistory.size() < longMaPeriod) { return; }
 
@@ -93,66 +104,100 @@ public class TradingService {
         resetMovingAverages(shortMA, longMA);
     }
 
+    /**
+     * Places a BUY order using a direct POST request to the Alpaca API.
+     */
     private void buy(double currentPrice) {
         System.out.printf("Attempting to place BUY order for $%.2f of %s%n", tradeAmountUsd, symbol);
-        try {
-            // --- UPDATED: Building a market order request with the new library ---
-            MarketOrderRequest marketOrderRequest = new MarketOrderRequest(
-                    symbol,
-                    null, // Quantity can be null when using notional value
-                    OrderSide.BUY,
-                    OrderType.MARKET,
-                    OrderTimeInForce.DAY, // GTC (Good 'til Canceled) is often not supported for crypto
-                    null,
-                    null,
-                    tradeAmountUsd, // Use 'notional' for dollar amount buys
-                    null
-            );
+        String url = baseUrl + "/v2/orders";
+        
+        // Create the JSON request body
+        OrderRequest orderRequest = new OrderRequest(symbol, String.valueOf(tradeAmountUsd), "buy", "market", "day");
+        HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
 
-            alpaca.orders().requestMarketOrder(marketOrderRequest);
+        try {
+            restTemplate.postForObject(url, requestEntity, String.class);
             System.out.println("BUY order placed successfully!");
             inPosition = true;
             purchasePrice = currentPrice;
-        } catch (AlpacaClientException e) {
+        } catch (Exception e) {
             System.err.println("Error placing BUY order: " + e.getMessage());
-            e.printStackTrace();
         }
     }
 
+    /**
+     * Places a SELL order by first getting the position quantity, then posting a sell order.
+     */
     private void sell() {
         System.out.printf("Attempting to place SELL order for all %s%n", symbol);
         try {
-            // --- UPDATED: Getting the position and creating a SELL order ---
-            Position position = alpaca.positions().getOpenPositionBySymbol(symbol);
-            String quantityToSell = position.getQty(); // The quantity is now a String
+            // Step 1: Get the current position from Alpaca to find the exact quantity to sell.
+            Position currentPosition = getPosition(symbol);
+            if (currentPosition == null) {
+                System.out.println("No position existed to sell. Resetting state.");
+                inPosition = false;
+                purchasePrice = 0.0;
+                return;
+            }
 
-            MarketOrderRequest marketOrderRequest = new MarketOrderRequest(
-                    symbol,
-                    quantityToSell, // Provide the exact quantity to sell
-                    OrderSide.SELL,
-                    OrderType.MARKET,
-                    OrderTimeInForce.DAY,
-                    null, null, null, null
-            );
-            
-            alpaca.orders().requestMarketOrder(marketOrderRequest);
+            String quantityToSell = currentPosition.getQty();
+
+            // Step 2: Submit a SELL order for the entire quantity.
+            String url = baseUrl + "/v2/orders";
+            OrderRequest orderRequest = new OrderRequest(symbol, quantityToSell, "sell", "market", "day");
+            HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
+
+            restTemplate.postForObject(url, requestEntity, String.class);
             System.out.println("SELL order (to close position) placed successfully!");
             inPosition = false;
             purchasePrice = 0.0;
-        } catch (AlpacaClientException e) {
+
+        } catch (Exception e) {
             System.err.println("Error placing SELL order: " + e.getMessage());
-            // This library throws a specific exception when a position is not found
-            if (e.getAPIResponse() != null && e.getAPIResponse().getCode() == 40410000) {
-                 System.out.println("No position existed to sell. Resetting state.");
-                 inPosition = false;
-                 purchasePrice = 0.0;
-            } else {
-                e.printStackTrace();
-            }
         }
     }
 
-    // --- HELPER METHODS (Unchanged) ---
+    /**
+     * Checks Alpaca for an open position for the given symbol on startup.
+     */
+    private void synchronizePositionState() {
+        System.out.println("Synchronizing state with Alpaca account...");
+        Position existingPosition = getPosition(symbol);
+
+        if (existingPosition != null) {
+            this.inPosition = true;
+            this.purchasePrice = Double.parseDouble(existingPosition.getAvgEntryPrice());
+            System.out.printf("Found existing position for %s. Quantity: %s, Avg Entry Price: $%.2f%n",
+                    symbol, existingPosition.getQty(), this.purchasePrice);
+        } else {
+            this.inPosition = false;
+            this.purchasePrice = 0.0;
+            System.out.println("No existing position found for " + symbol + ". Initializing fresh state.");
+        }
+    }
+    
+    /**
+     * A helper method to get a single position by its symbol from the Alpaca API.
+     */
+    private Position getPosition(String symbol) {
+        // Alpaca API requires URL encoding for symbols with a '/'
+        String encodedSymbol = symbol.replace("/", "%2F");
+        String url = baseUrl + "/v2/positions/" + encodedSymbol;
+        HttpEntity<String> entity = new HttpEntity<>(apiHeaders);
+        
+        try {
+            ResponseEntity<Position> response = restTemplate.exchange(url, HttpMethod.GET, entity, Position.class);
+            return response.getBody();
+        } catch (HttpClientErrorException.NotFound e) {
+            // This is the expected error when no position exists.
+            return null;
+        } catch (Exception e) {
+            System.err.println("Error fetching position for " + symbol + ": " + e.getMessage());
+            return null;
+        }
+    }
+    
+    // --- Helper Methods (Unchanged) ---
 
     private void resetMovingAverages(double shortMA, double longMA) {
         this.previousShortMA = shortMA;
@@ -169,7 +214,7 @@ public class TradingService {
         final String url = "https://api.coincap.io/v2/assets/bitcoin";
         try {
             CoinCapResponse response = restTemplate.getForObject(url, CoinCapResponse.class);
-            if (response != null && response.getData() != null) {
+            if (response != null && response.getData() != null && response.getData().getPriceUsd() != null) {
                 return Double.parseDouble(response.getData().getPriceUsd());
             }
         } catch (Exception e) {
@@ -177,23 +222,51 @@ public class TradingService {
         }
         return 0.0;
     }
+    
+    // --- Helper Classes for JSON data handling ---
 
-    // --- DTO CLASSES (Unchanged) ---
+    // Used for creating the JSON body of a new order request.
+    @Data
+    @NoArgsConstructor
+    private static class OrderRequest {
+        private String symbol;
+        private String notional; // For BUY orders in USD
+        private String qty;      // For SELL orders
+        private String side;
+        private String type;
+        @JsonProperty("time_in_force")
+        private String timeInForce;
 
+        // Constructor for a notional (dollar-based) BUY order
+        public OrderRequest(String symbol, String notional, String side, String type, String timeInForce) {
+            this.symbol = symbol;
+            this.notional = notional;
+            this.side = side;
+            this.type = type;
+            this.timeInForce = timeInForce;
+        }
+    }
+
+    // Used for parsing the JSON response when fetching an existing position.
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private static class Position {
+        private String symbol;
+        private String qty;
+        @JsonProperty("avg_entry_price")
+        private String avgEntryPrice;
+    }
+
+    // DTOs for CoinCap Price Fetching (Unchanged)
+    @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static class CoinCapResponse {
         private AssetData data;
-        public AssetData getData() { return data; }
-        public void setData(AssetData data) { this.data = data; }
     }
-
+    
+    @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static class AssetData {
         private String priceUsd;
-        @JsonProperty("priceUsd")
-        public String getPriceUsd() { return priceUsd; }
-        public void setPriceUsd(String priceUsd) { this.priceUsd = priceUsd; }
     }
 }
-
-

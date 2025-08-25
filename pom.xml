@@ -29,12 +29,12 @@
             <artifactId>spring-boot-starter-mail</artifactId>
         </dependency>
 
-        <!-- For parsing JSON responses -->
-        <dependency>
-          <groupId>net.jacobpeterson</groupId>
-          <artifactId>alpaca-java</artifactId>
-          <version>9.1.0</version>
-        </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-test</artifactId>
+        <scope>test</scope>
+    </dependency>
+
 
         <!-- Reduces boilerplate code -->
         <dependency>
@@ -43,12 +43,6 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- Standard testing framework -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
 
     <build>
