@@ -2,12 +2,12 @@ package com.example.tradingbot.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import net.jacobpeterson.alpaca.AlpacaAPI;
-// CORRECTED import statements for library version 10.0.1
-import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderSide;
-import net.jacobpeterson.alpaca.model.endpoint.orders.enums.OrderTimeInForce;
-import net.jacobpeterson.alpaca.model.util.apitype.enums.EndpointAPIType;
-import net.jacobpeterson.alpaca.rest.exception.AlpacaAPIRequestException;
+// CORRECTED IMPORTS for the 'io.github.mainstringargs' library
+import io.github.mainstringargs.alpaca.AlpacaAPI;
+import io.github.mainstringargs.alpaca.enums.OrderSide;
+import io.github.mainstringargs.alpaca.enums.OrderTimeInForce;
+import io.github.mainstringargs.alpaca.rest.exception.AlpacaAPIRequestException;
+import io.github.mainstringargs.domain.alpaca.position.Position;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -25,7 +25,8 @@ public class TradingService {
     private String apiKey;
     @Value("${alpaca.api.secret}")
     private String apiSecret;
-    // The baseUrl is no longer needed as we use the EndpointAPIType enum.
+    @Value("${alpaca.api.base-url}")
+    private String baseUrl;
     @Value("${trading.symbol}")
     private String symbol;
     @Value("${trading.short-ma-period}")
@@ -50,8 +51,7 @@ public class TradingService {
 
     @PostConstruct
     public void init() {
-        // CORRECTED INITIALIZATION: Using the EndpointAPIType enum for clarity and stability.
-        this.alpacaAPI = new AlpacaAPI(apiKey, apiSecret, EndpointAPIType.PAPER);
+        this.alpacaAPI = new AlpacaAPI(apiKey, apiSecret, baseUrl);
     }
 
     public void executeStrategy() {
@@ -90,12 +90,8 @@ public class TradingService {
         System.out.printf("Attempting to place BUY order for $%.2f of %s%n", tradeAmountUsd, symbol);
         try {
             double quantity = tradeAmountUsd / currentPrice;
-            alpacaAPI.orders().requestMarketOrder(
-                    symbol,
-                    quantity,
-                    OrderSide.BUY,
-                    OrderTimeInForce.GOOD_UNTIL_CANCELLED
-            );
+            // This library uses a direct method call for market orders and requires an integer quantity
+            alpacaAPI.requestNewMarketOrder(symbol, (int) Math.floor(quantity), OrderSide.BUY, OrderTimeInForce.GTC, null, null);
             System.out.println("BUY order placed successfully!");
             inPosition = true;
             purchasePrice = currentPrice;
@@ -108,18 +104,23 @@ public class TradingService {
     private void sell() {
         System.out.printf("Attempting to place SELL order for all %s%n", symbol);
         try {
-            alpacaAPI.positions().close(symbol);
-            System.out.println("SELL order (close position) placed successfully!");
+            // Get the current position to find out the exact quantity to sell.
+            Position position = alpacaAPI.getPosition(symbol);
+            int quantityToSell = position.getQty();
+
+            // Submit a SELL order for the entire quantity.
+            alpacaAPI.requestNewMarketOrder(symbol, quantityToSell, OrderSide.SELL, OrderTimeInForce.GTC, null, null);
+            System.out.println("SELL order (to close position) placed successfully!");
             inPosition = false;
             purchasePrice = 0.0;
         } catch (AlpacaAPIRequestException e) {
             System.err.println("Error placing SELL order: " + e.getMessage());
-            if (!e.getMessage().contains("position not found")) {
-                e.printStackTrace();
-            } else {
+            if (e.getMessage().contains("position not found")) {
                 System.out.println("No position existed to sell. Resetting state.");
                 inPosition = false;
                 purchasePrice = 0.0;
+            } else {
+                e.printStackTrace();
             }
         }
     }
