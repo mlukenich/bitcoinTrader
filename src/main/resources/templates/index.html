@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot Control</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .animate-pulse-running {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center min-h-screen font-sans">
+
+<div class="w-full max-w-2xl bg-white rounded-2xl shadow-lg p-8">
+
+    <div class="flex flex-col items-center mb-6 text-center">
+        <svg class="w-16 h-16 text-blue-500 mb-4" xmlns="http://www.w.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />
+        </svg>
+        <h1 class="text-3xl font-bold text-gray-800">Trading Bot</h1>
+        <p class="text-gray-500">Control Panel</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 items-start mb-8">
+        <div class="text-center">
+            <div class="mb-6">
+                <p class="text-lg text-gray-500">Current BTC Price</p>
+                <p id="current-price" class="text-4xl font-bold text-gray-800">---</p>
+            </div>
+
+            <div id="status-container" class="mb-6 p-4 rounded-lg transition-colors duration-300">
+                <p id="status-text" class="text-lg font-semibold">Checking status...</p>
+            </div>
+            <div class="flex justify-center space-x-4">
+                <button id="startBtn" class="w-full bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50 transition-transform transform hover:scale-105">
+                    Start
+                </button>
+                <button id="stopBtn" class="w-full bg-red-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 transition-transform transform hover:scale-105">
+                    Stop
+                </button>
+            </div>
+            <p id="response" class="mt-6 text-gray-600 min-h-[24px]"></p>
+        </div>
+
+        <div class="bg-gray-50 p-4 rounded-lg h-80 overflow-y-auto">
+            <h2 class="text-xl font-bold text-gray-700 mb-4 text-center">Recent Activity</h2>
+            <div id="activity-log" class="space-y-2 text-sm text-gray-600">
+                <p>No activity yet...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const statusContainer = document.getElementById('status-container');
+    const statusText = document.getElementById('status-text');
+    const responseP = document.getElementById('response');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const activityLog = document.getElementById('activity-log');
+    const currentPriceText = document.getElementById('current-price');
+
+    function setStatus(state, message) {
+        statusText.textContent = message;
+        statusContainer.classList.remove('bg-gray-200', 'bg-green-100', 'text-green-800', 'bg-red-100', 'text-red-800', 'animate-pulse-running');
+
+        if (state === 'RUNNING') {
+            statusContainer.classList.add('bg-green-100', 'text-green-800', 'animate-pulse-running');
+        } else if (state === 'STOPPED') {
+            statusContainer.classList.add('bg-red-100', 'text-red-800');
+        } else {
+            statusContainer.classList.add('bg-gray-200');
+        }
+    }
+
+    async function updateStatus() {
+        try {
+            const response = await fetch('/status');
+            if (!response.ok) throw new Error('Server not reachable');
+            const text = await response.text();
+
+            // Use the text itself for the display but check for a keyword for the color state
+            if (text.toLowerCase().includes('running') || text.toLowerCase().includes('gathering')) {
+                setStatus('RUNNING', text);
+            } else {
+                setStatus('STOPPED', text);
+            }
+        } catch (error) {
+            setStatus('ERROR', 'Error: Could not connect to the server.');
+        }
+    }
+
+    async function updateActivityLog() {
+        try {
+            const response = await fetch('/activity');
+            if (!response.ok) return;
+            const logEntries = await response.json();
+
+            activityLog.innerHTML = ''; // Clear previous entries
+
+            if (logEntries.length === 0) {
+                activityLog.innerHTML = '<p>No activity yet...</p>';
+                return;
+            }
+
+            logEntries.forEach(entry => {
+                const p = document.createElement('p');
+                p.textContent = entry;
+                p.className = 'border-b border-gray-200 pb-1';
+                activityLog.appendChild(p);
+            });
+        } catch (error) {
+            // Silently fail, don't show an error for the log
+        }
+    }
+
+    async function updatePrice() {
+        try {
+            const response = await fetch('/price');
+            if (!response.ok) {
+                currentPriceText.textContent = 'Error';
+                return;
+            };
+            const data = await response.json();
+            if (data.price > 0) {
+                currentPriceText.textContent = data.formattedPrice;
+            } else {
+                currentPriceText.textContent = '---';
+            }
+        } catch (error) {
+            currentPriceText.textContent = 'Error';
+        }
+    }
+
+    async function sendCommand(command) {
+        try {
+            const response = await fetch(`/${command}`);
+            const text = await response.text();
+            responseP.textContent = text;
+            // Immediately update the status after a command is sent
+            await updateStatus();
+        } catch (error) {
+            responseP.textContent = `Error: Could not send the '${command}' command.`;
+        }
+    }
+
+    startBtn.addEventListener('click', () => sendCommand('start'));
+    stopBtn.addEventListener('click', () => sendCommand('stop'));
+
+    document.addEventListener('DOMContentLoaded', () => {
+        setStatus('INITIAL', 'Checking status...');
+        // Initial fetch for all data
+        updateStatus();
+        updateActivityLog();
+        updatePrice();
+
+        // Poll every 5 seconds for all data
+        setInterval(() => {
+            updateStatus();
+            updateActivityLog();
+            updatePrice();
+        }, 5000);
+    });
+</script>
+
+</body>
+</html>
+
+

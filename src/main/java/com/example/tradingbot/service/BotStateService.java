@@ -2,6 +2,7 @@ package com.example.tradingbot.service;
 
 import org.springframework.stereotype.Service;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Manages the global state of the trading bot (e.g., running or stopped).
@@ -10,39 +11,35 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Service
 public class BotStateService {
 
-    // AtomicBoolean is used for thread-safe operations on a boolean value.
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
+    // Use AtomicReference for a thread-safe, updatable status message
+    private final AtomicReference<String> statusMessage = new AtomicReference<>("STOPPED");
 
-    /**
-     * Starts the trading bot's operation.
-     */
     public void start() {
-        isRunning.set(true);
-        System.out.println("Trading Bot state has been set to: STARTED.");
+        if (isRunning.compareAndSet(false, true)) {
+            setStatusMessage("STARTED");
+        }
     }
 
-    /**
-     * Stops the trading bot's operation.
-     */
     public void stop() {
-        isRunning.set(false);
-        System.out.println("Trading Bot state has been set to: STOPPED.");
+        if (isRunning.compareAndSet(true, false)) {
+            setStatusMessage("STOPPED");
+        }
     }
 
-    /**
-     * Checks if the bot is currently running.
-     * @return true if the bot is running, false otherwise.
-     */
     public boolean isRunning() {
         return isRunning.get();
     }
 
-    /**
-     * Gets the current status of the bot as a string.
-     * @return "RUNNING" or "STOPPED".
-     */
     public String getStatus() {
-        return isRunning() ? "RUNNING" : "STOPPED";
+        return statusMessage.get();
+    }
+
+    public void setStatusMessage(String message) {
+        // Only update the message if the bot is considered running.
+        if (isRunning.get()) {
+            this.statusMessage.set(message);
+        }
     }
 }
 
