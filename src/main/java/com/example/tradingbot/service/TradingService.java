@@ -232,7 +232,7 @@ public class TradingService {
         System.out.printf("Attempting to place BUY order for $%.2f of %s%n", tradeAmountUsd, symbol);
         String url = baseUrl + "/v2/orders";
 
-        OrderRequest orderRequest = new OrderRequest(symbol, null, String.valueOf(tradeAmountUsd), "buy", "market", "day");
+        OrderRequest orderRequest = new OrderRequest(symbol, null, String.valueOf(tradeAmountUsd), "buy", "market", "gtc");
         HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
 
         try {
@@ -272,7 +272,7 @@ public class TradingService {
             String quantityToSell = currentPosition.getQty();
 
             String url = baseUrl + "/v2/orders";
-            OrderRequest orderRequest = new OrderRequest(symbol, quantityToSell, null, "sell", "market", "day");
+            OrderRequest orderRequest = new OrderRequest(symbol, quantityToSell, null, "sell", "market", "gtc");
             HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
 
             restTemplate.postForObject(url, requestEntity, String.class);
