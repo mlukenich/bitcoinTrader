@@ -4,11 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trading Bot Control</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.7; }
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.7;
+            }
         }
         .animate-pulse-running {
             animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
@@ -27,23 +32,35 @@
         <p class="text-gray-500">Control Panel</p>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 items-start mb-8">
+    <div class="text-center border-b pb-6 mb-6">
+        <h2 class="text-xl font-bold text-gray-700 mb-2">Account Status</h2>
+        <div class="flex justify-center items-center space-x-6">
+            <div>
+                <p class="text-lg text-gray-500">Equity</p>
+                <p id="account-equity" class="text-3xl font-bold text-gray-800">---</p>
+            </div>
+            <div>
+                <p class="text-lg text-gray-500">Today's P/L</p>
+                <p id="account-gain-loss" class="text-3xl font-bold text-gray-800">---</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
         <div class="text-center">
             <div class="mb-6">
                 <p class="text-lg text-gray-500">Current BTC Price</p>
                 <p id="current-price" class="text-4xl font-bold text-gray-800">---</p>
+                <p class="text-md text-gray-500 mt-2">RSI (14)</p>
+                <p id="current-rsi" class="text-2xl font-semibold text-gray-700">---</p>
             </div>
 
             <div id="status-container" class="mb-6 p-4 rounded-lg transition-colors duration-300">
                 <p id="status-text" class="text-lg font-semibold">Checking status...</p>
             </div>
             <div class="flex justify-center space-x-4">
-                <button id="startBtn" class="w-full bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50 transition-transform transform hover:scale-105">
-                    Start
-                </button>
-                <button id="stopBtn" class="w-full bg-red-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 transition-transform transform hover:scale-105">
-                    Stop
-                </button>
+                <button id="startBtn" class="w-full bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600">Start</button>
+                <button id="stopBtn" class="w-full bg-red-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-red-600">Stop</button>
             </div>
             <p id="response" class="mt-6 text-gray-600 min-h-[24px]"></p>
         </div>
@@ -65,6 +82,9 @@
     const stopBtn = document.getElementById('stopBtn');
     const activityLog = document.getElementById('activity-log');
     const currentPriceText = document.getElementById('current-price');
+    const currentRsiText = document.getElementById('current-rsi');
+    const accountEquityText = document.getElementById('account-equity');
+    const accountGainLossText = document.getElementById('account-gain-loss');
 
     function setStatus(state, message) {
         statusText.textContent = message;
@@ -85,8 +105,7 @@
             if (!response.ok) throw new Error('Server not reachable');
             const text = await response.text();
 
-            // Use the text itself for the display but check for a keyword for the color state
-            if (text.toLowerCase().includes('running') || text.toLowerCase().includes('gathering')) {
+            if (text.toLowerCase().includes('running') || text.toLowerCase().includes('gathering') || text.toLowerCase().includes('monitoring')) {
                 setStatus('RUNNING', text);
             } else {
                 setStatus('STOPPED', text);
@@ -102,7 +121,7 @@
             if (!response.ok) return;
             const logEntries = await response.json();
 
-            activityLog.innerHTML = ''; // Clear previous entries
+            activityLog.innerHTML = '';
 
             if (logEntries.length === 0) {
                 activityLog.innerHTML = '<p>No activity yet...</p>';
@@ -116,7 +135,7 @@
                 activityLog.appendChild(p);
             });
         } catch (error) {
-            // Silently fail, don't show an error for the log
+            // Silently fail on activity log
         }
     }
 
@@ -125,16 +144,42 @@
             const response = await fetch('/price');
             if (!response.ok) {
                 currentPriceText.textContent = 'Error';
+                currentRsiText.textContent = 'Error';
                 return;
             };
             const data = await response.json();
+
             if (data.price > 0) {
                 currentPriceText.textContent = data.formattedPrice;
             } else {
                 currentPriceText.textContent = '---';
             }
+
+            if (data.rsi > 0) {
+                currentRsiText.textContent = data.formattedRsi;
+            } else {
+                currentRsiText.textContent = '---';
+            }
         } catch (error) {
             currentPriceText.textContent = 'Error';
+            currentRsiText.textContent = 'Error';
+        }
+    }
+
+    async function updateAccountInfo() {
+        try {
+            const response = await fetch('/account');
+            if (!response.ok) throw new Error('Failed to fetch account');
+            const data = await response.json();
+
+            if (data.equity) {
+                accountEquityText.textContent = data.equity;
+                accountGainLossText.textContent = `${data.dailyGainLoss} ${data.dailyGainLossPercent}`;
+                accountGainLossText.className = `text-3xl font-bold ${data.gainLossColor}`;
+            }
+        } catch (error) {
+            accountEquityText.textContent = 'Error';
+            accountGainLossText.textContent = 'Error';
         }
     }
 
@@ -143,7 +188,6 @@
             const response = await fetch(`/${command}`);
             const text = await response.text();
             responseP.textContent = text;
-            // Immediately update the status after a command is sent
             await updateStatus();
         } catch (error) {
             responseP.textContent = `Error: Could not send the '${command}' command.`;
@@ -155,21 +199,21 @@
 
     document.addEventListener('DOMContentLoaded', () => {
         setStatus('INITIAL', 'Checking status...');
-        // Initial fetch for all data
+
         updateStatus();
         updateActivityLog();
         updatePrice();
+        updateAccountInfo();
 
-        // Poll every 5 seconds for all data
         setInterval(() => {
             updateStatus();
             updateActivityLog();
             updatePrice();
+            updateAccountInfo();
         }, 5000);
     });
 </script>
 
 </body>
 </html>
-
 

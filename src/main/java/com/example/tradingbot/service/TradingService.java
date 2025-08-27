@@ -19,6 +19,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
 @Service
 public class TradingService {
 
@@ -50,6 +53,21 @@ public class TradingService {
     @Value("${trading.stop-loss-percentage}")
     private double stopLossPercentage;
 
+    @Value("${trading.rsi-period}")
+    private int rsiPeriod;
+
+    @Value("${trading.take-profit.enabled}")
+    private boolean takeProfitEnabled;
+
+    @Value("${trading.take-profit.percentage}")
+    private double takeProfitPercentage;
+
+    @Value("${trading.trailing-stop.enabled}")
+    private boolean trailingStopEnabled;
+
+    @Value("${trading.trailing-stop.percentage}")
+    private double trailingStopPercentage;
+
     // --- State Variables ---
     private final List<Double> priceHistory = Collections.synchronizedList(new ArrayList<>());
     private boolean inPosition = false;
@@ -58,14 +76,19 @@ public class TradingService {
     private double previousLongMA = 0.0;
     private double lastKnownPrice = 0.0;
     private final List<String> activityLog = new CopyOnWriteArrayList<>();
+    private double lastKnownRsi = 0.0;
+    private double highestPriceSinceBuy = 0.0;
+
 
     private final RestTemplate restTemplate = new RestTemplate();
     private HttpHeaders apiHeaders;
 
     private final BotStateService botStateService;
+    private final NotificationService notificationService;
 
-    public TradingService(BotStateService botStateService) {
+    public TradingService(BotStateService botStateService, NotificationService notificationService) {
         this.botStateService = botStateService;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -103,36 +126,103 @@ public class TradingService {
             priceHistory.remove(0);
         }
 
-        if (priceHistory.size() < longMaPeriod) {
-            // UPDATED: Set the status message instead of cluttering the activity log
-            String message = String.format("Gathering Price Data (%d/%d)", priceHistory.size(), longMaPeriod);
+        // We need at least one more price point than the RSI period to calculate the first change.
+        if (priceHistory.size() < rsiPeriod + 1) {
+            String message = String.format("Gathering Price Data (%d/%d)", priceHistory.size(), rsiPeriod + 1);
             botStateService.setStatusMessage(message);
             return;
         }
 
-        // When we have enough data, set a normal monitoring status
-        botStateService.setStatusMessage("RUNNING - Monitoring price...");
-
+        // --- RSI CALCULATION & TRADING LOGIC ---
+        this.lastKnownRsi = calculateRsi();
         double shortMA = calculateMovingAverage(shortMaPeriod);
         double longMA = calculateMovingAverage(longMaPeriod);
 
+        botStateService.setStatusMessage(String.format("Monitoring | RSI: %.2f", this.lastKnownRsi));
+
         if (inPosition) {
-            double stopLossPrice = purchasePrice * (1 - stopLossPercentage);
-            if (currentPrice <= stopLossPrice) {
-                addLogEntry(String.format("Stop-loss triggered at $%.2f. Selling.", currentPrice));
+            // Update the highest price seen since the buy
+            highestPriceSinceBuy = Math.max(highestPriceSinceBuy, currentPrice);
+
+            // 1. Check for Take-Profit condition
+            double takeProfitPrice = purchasePrice * (1 + takeProfitPercentage);
+            if (takeProfitEnabled && currentPrice >= takeProfitPrice) {
+                String logMsg = String.format("Take-profit triggered at $%.2f. Selling.", currentPrice);
+                addLogEntry(logMsg);
+                notificationService.sendTradeNotification("Trading Bot: Take-Profit Executed", logMsg);
+                sell();
+                resetMovingAverages(shortMA, longMA);
+                return;
+            }
+
+            // 2. Check for Trailing Stop-Loss condition
+            double trailingStopPrice = highestPriceSinceBuy * (1 - trailingStopPercentage);
+            if (trailingStopEnabled && currentPrice <= trailingStopPrice) {
+                String logMsg = String.format("Trailing stop-loss triggered at $%.2f (peak was $%.2f). Selling.", currentPrice, highestPriceSinceBuy);
+                addLogEntry(logMsg);
+                notificationService.sendTradeNotification("Trading Bot: Trailing Stop Executed", logMsg);
+                sell();
+                resetMovingAverages(shortMA, longMA);
+                return;
+            }
+
+            // 3. Check for initial Stop-Loss condition (acts as a safety net)
+            double initialStopPrice = purchasePrice * (1 - stopLossPercentage);
+            if (currentPrice <= initialStopPrice) {
+                String logMsg = String.format("Initial stop-loss triggered at $%.2f. Selling.", currentPrice);
+                addLogEntry(logMsg);
+                notificationService.sendTradeNotification("Trading Bot: Stop-Loss Executed", logMsg);
                 sell();
                 resetMovingAverages(shortMA, longMA);
                 return;
             }
         }
 
-        if (shortMA > longMA && previousShortMA <= previousLongMA && !inPosition) {
+        // UPDATED LOGIC: Added RSI check to buy and sell signals
+        boolean isBullish = this.lastKnownRsi > 50;
+        boolean isBearish = this.lastKnownRsi < 50;
+
+        if (shortMA > longMA && previousShortMA <= previousLongMA && !inPosition && isBullish) {
+            addLogEntry("MA Crossover and Bullish RSI detected. Placing BUY order.");
             buy(currentPrice);
-        } else if (shortMA < longMA && previousShortMA >= previousLongMA && inPosition) {
+        } else if (shortMA < longMA && previousShortMA >= previousLongMA && inPosition && isBearish) {
+            addLogEntry("MA Crossover and Bearish RSI detected. Placing SELL order.");
             sell();
         }
 
         resetMovingAverages(shortMA, longMA);
+    }
+
+    private double calculateRsi() {
+        if (priceHistory.size() < rsiPeriod + 1) {
+            return 0.0; // Not enough data
+        }
+
+        List<Double> gains = new ArrayList<>();
+        List<Double> losses = new ArrayList<>();
+
+        // Calculate gains and losses for the last `rsiPeriod` changes
+        for (int i = priceHistory.size() - rsiPeriod; i < priceHistory.size(); i++) {
+            double change = priceHistory.get(i) - priceHistory.get(i - 1);
+            if (change > 0) {
+                gains.add(change);
+                losses.add(0.0);
+            } else {
+                gains.add(0.0);
+                losses.add(Math.abs(change));
+            }
+        }
+
+        // Calculate average gain and loss
+        double avgGain = gains.stream().mapToDouble(d -> d).average().orElse(0.0);
+        double avgLoss = losses.stream().mapToDouble(d -> d).average().orElse(0.0);
+
+        if (avgLoss == 0) {
+            return 100.0; // Prevent division by zero; max bullishness
+        }
+
+        double rs = avgGain / avgLoss;
+        return 100 - (100 / (1 + rs));
     }
 
     /**
@@ -148,9 +238,12 @@ public class TradingService {
         try {
             restTemplate.postForObject(url, requestEntity, String.class);
             System.out.println("BUY order placed successfully!");
-            addLogEntry(String.format("BUY order placed for $%.2f of %s at price $%.2f", tradeAmountUsd, symbol, currentPrice));
+            String message = String.format("BUY order placed for $%.2f of %s at price $%.2f", tradeAmountUsd, symbol, currentPrice);
+            addLogEntry(message);
+            notificationService.sendTradeNotification("Trading Bot: BUY Order Executed", message);
             inPosition = true;
             purchasePrice = currentPrice;
+            highestPriceSinceBuy = currentPrice;
         } catch (Exception e) {
             String errorMsg = "Error placing BUY order: " + e.getMessage();
             System.err.println(errorMsg);
@@ -168,8 +261,11 @@ public class TradingService {
             if (currentPosition == null) {
                 System.out.println("No position existed to sell. Resetting state.");
                 addLogEntry("SELL signal, but no position found. Resetting state.");
+                String message = String.format("SELL order placed for %s to close position.", symbol);
+                notificationService.sendTradeNotification("Trading Bot: SELL Order Executed", message);
                 inPosition = false;
                 purchasePrice = 0.0;
+                highestPriceSinceBuy = 0.0;
                 return;
             }
 
@@ -184,7 +280,7 @@ public class TradingService {
             addLogEntry(String.format("SELL order placed for %s to close position.", symbol));
             inPosition = false;
             purchasePrice = 0.0;
-
+            highestPriceSinceBuy = 0.0;
         } catch (Exception e) {
             String errorMsg = "Error placing SELL order: " + e.getMessage();
             System.err.println(errorMsg);
@@ -249,12 +345,26 @@ public class TradingService {
         if (existingPosition != null) {
             this.inPosition = true;
             this.purchasePrice = Double.parseDouble(existingPosition.getAvgEntryPrice());
+            this.highestPriceSinceBuy = this.purchasePrice;
             System.out.printf("Found existing position for %s. Quantity: %s, Avg Entry Price: $%.2f%n",
                     symbol, existingPosition.getQty(), this.purchasePrice);
         } else {
             this.inPosition = false;
             this.purchasePrice = 0.0;
+            this.highestPriceSinceBuy = 0.0;
             System.out.println("No existing position found for " + symbol + ". Initializing fresh state.");
+        }
+    }
+
+    public AlpacaAccount getAccountStatus() {
+        String url = baseUrl + "/v2/account";
+        HttpEntity<String> entity = new HttpEntity<>(apiHeaders);
+        try {
+            ResponseEntity<AlpacaAccount> response = restTemplate.exchange(url, HttpMethod.GET, entity, AlpacaAccount.class);
+            return response.getBody();
+        } catch (Exception e) {
+            System.err.println("Error fetching Alpaca account info: " + e.getMessage());
+            return null;
         }
     }
 
@@ -285,7 +395,9 @@ public class TradingService {
     public double getLastKnownPrice() {
         return lastKnownPrice;
     }
-
+    public double getLastKnownRsi() {
+        return this.lastKnownRsi;
+    }
     // --- Helper Classes for JSON data handling ---
 
     @Data
@@ -448,6 +560,49 @@ public class TradingService {
 
         public void setOpen(double open) {
             this.open = open;
+        }
+    }
+
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class AlpacaAccount {
+        private String status;
+        private double equity;
+        @JsonProperty("last_equity")
+        private double lastEquity;
+        @JsonProperty("buying_power")
+        private double buyingPower;
+
+        public String getStatus() {
+            return status;
+        }
+
+        public void setStatus(String status) {
+            this.status = status;
+        }
+
+        public double getEquity() {
+            return equity;
+        }
+
+        public void setEquity(double equity) {
+            this.equity = equity;
+        }
+
+        public double getLastEquity() {
+            return lastEquity;
+        }
+
+        public void setLastEquity(double lastEquity) {
+            this.lastEquity = lastEquity;
+        }
+
+        public double getBuyingPower() {
+            return buyingPower;
+        }
+
+        public void setBuyingPower(double buyingPower) {
+            this.buyingPower = buyingPower;
         }
     }
 }

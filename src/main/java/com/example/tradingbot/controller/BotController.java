@@ -66,13 +66,33 @@ public class BotController {
      * @return last known bitcoin price
      */
     @GetMapping("/price")
-    public Map<String, Object> getPrice() {
+    public Map<String, Object> getMarketData() {
         double price = tradingService.getLastKnownPrice();
-        // Returning a Map will be automatically converted to JSON by Spring
+        double rsi = tradingService.getLastKnownRsi(); // Get the RSI
+
         return Map.of(
                 "price", price,
-                "formattedPrice", String.format("$%,.2f", price)
+                "formattedPrice", String.format("$%,.2f", price),
+                "rsi", rsi, // Add RSI to the response
+                "formattedRsi", String.format("%.2f", rsi)
         );
+    }
+
+    @GetMapping("/account")
+    public Map<String, Object> getAccount() {
+        TradingService.AlpacaAccount account = tradingService.getAccountStatus();
+        if (account != null) {
+            double dailyGainLoss = account.getEquity() - account.getLastEquity();
+            double dailyGainLossPercent = (dailyGainLoss / account.getLastEquity()) * 100;
+
+            return Map.of(
+                    "equity", String.format("$%,.2f", account.getEquity()),
+                    "dailyGainLoss", String.format("%s$%,.2f", dailyGainLoss >= 0 ? "+" : "", dailyGainLoss),
+                    "dailyGainLossPercent", String.format("(%.2f%%)", dailyGainLossPercent),
+                    "gainLossColor", dailyGainLoss >= 0 ? "text-green-600" : "text-red-600"
+            );
+        }
+        return Map.of(); // Return empty map on error
     }
 }
 

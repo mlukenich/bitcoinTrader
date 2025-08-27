@@ -8,7 +8,10 @@ WORKDIR /app
 COPY pom.xml .
 COPY src ./src
 
-# Build the project and create the executable JAR, skipping tests
+# Install Maven
+RUN apt-get update && apt-get install -y maven
+
+# Now build the project
 RUN mvn clean package -DskipTests
 
 # ---
