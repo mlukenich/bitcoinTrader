@@ -18,9 +18,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
 
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
+import lombok.Setter;
+import lombok.Getter;
 
 @Service
 public class TradingService {
@@ -41,24 +42,35 @@ public class TradingService {
     @Value("${trading.symbol}")
     private String symbol;
 
+    @Setter
     @Value("${trading.short-ma-period}")
     private int shortMaPeriod;
 
+    @Setter
     @Value("${trading.long-ma-period}")
     private int longMaPeriod;
 
-    @Value("${trading.trade-amount-usd}")
-    private double tradeAmountUsd;
+    @Value("${trading.risk.percentage}")
+    private double riskPercentage;
 
-    @Value("${trading.stop-loss-percentage}")
-    private double stopLossPercentage;
+    @Value("${trading.initial-stop-loss.percentage}")
+    private double initialStopLossPercentage;
 
+    @Value("${trading.atr.period}")
+    private int atrPeriod;
+
+    @Value("${trading.atr.multiplier}")
+    private double atrMultiplier;
+
+    @Setter
     @Value("${trading.rsi-period}")
     private int rsiPeriod;
 
+    @Setter
     @Value("${trading.take-profit.enabled}")
     private boolean takeProfitEnabled;
 
+    @Setter
     @Value("${trading.take-profit.percentage}")
     private double takeProfitPercentage;
 
@@ -70,7 +82,9 @@ public class TradingService {
 
     // --- State Variables ---
     private final List<Double> priceHistory = Collections.synchronizedList(new ArrayList<>());
+    @Setter
     private boolean inPosition = false;
+    @Setter
     private double purchasePrice = 0.0;
     private double previousShortMA = 0.0;
     private double previousLongMA = 0.0;
@@ -78,7 +92,8 @@ public class TradingService {
     private final List<String> activityLog = new CopyOnWriteArrayList<>();
     private double lastKnownRsi = 0.0;
     private double highestPriceSinceBuy = 0.0;
-
+    @Getter
+    private final List<AlpacaBar> barHistory = Collections.synchronizedList(new ArrayList<>());
 
     private final RestTemplate restTemplate = new RestTemplate();
     private HttpHeaders apiHeaders;
@@ -111,40 +126,48 @@ public class TradingService {
      * The main trading logic loop.
      */
     public void executeStrategy() {
-        double currentPrice = fetchCurrentBitcoinPriceFromAlpaca();
-        if (currentPrice == 0.0 && lastKnownPrice != 0.0) {
-            currentPrice = lastKnownPrice;
-        } else if (currentPrice == 0.0) {
-            botStateService.setStatusMessage("Could not fetch price...");
+        // This method now returns a full AlpacaBar object
+        AlpacaBar latestBar = fetchLatestBarFromAlpaca();
+
+        if (latestBar == null && !barHistory.isEmpty()) {
+            latestBar = barHistory.get(barHistory.size() - 1); // Use last known bar on failure
+        } else if (latestBar == null) {
+            botStateService.setStatusMessage("Could not fetch price data...");
             return;
         }
 
-        priceHistory.add(currentPrice);
+        double currentPrice = latestBar.getClose();
         lastKnownPrice = currentPrice;
+        barHistory.add(latestBar);
 
-        while (priceHistory.size() > longMaPeriod) {
-            priceHistory.remove(0);
+        // Trim history to prevent memory leaks
+        while (barHistory.size() > longMaPeriod + 1) { // Keep a little extra for calculations
+            barHistory.remove(0);
         }
 
-        // We need at least one more price point than the RSI period to calculate the first change.
-        if (priceHistory.size() < rsiPeriod + 1) {
-            String message = String.format("Gathering Price Data (%d/%d)", priceHistory.size(), rsiPeriod + 1);
+        // We need enough bars for the longest calculation (either long MA or ATR period)
+        int requiredDataPoints = Math.max(longMaPeriod, atrPeriod) + 1;
+        if (barHistory.size() < requiredDataPoints) {
+            String message = String.format("Gathering Price Data (%d/%d)", barHistory.size(), requiredDataPoints);
             botStateService.setStatusMessage(message);
             return;
         }
 
-        // --- RSI CALCULATION & TRADING LOGIC ---
-        this.lastKnownRsi = calculateRsi();
-        double shortMA = calculateMovingAverage(shortMaPeriod);
-        double longMA = calculateMovingAverage(longMaPeriod);
+        // Extract close prices for MA and RSI calculations
+        List<Double> closePrices = barHistory.stream().map(AlpacaBar::getClose).collect(Collectors.toList());
+
+        this.lastKnownRsi = calculateRsi(closePrices);
+        double shortMA = calculateMovingAverage(closePrices, shortMaPeriod);
+        double longMA = calculateMovingAverage(closePrices, longMaPeriod);
 
         botStateService.setStatusMessage(String.format("Monitoring | RSI: %.2f", this.lastKnownRsi));
 
         if (inPosition) {
-            // Update the highest price seen since the buy
+            // Update the highest price seen since the buy to be used by the trailing stop
             highestPriceSinceBuy = Math.max(highestPriceSinceBuy, currentPrice);
 
-            // 1. Check for Take-Profit condition
+            // --- Exit Condition Priority ---
+            // 1. Check for Take-Profit condition first to lock in gains.
             double takeProfitPrice = purchasePrice * (1 + takeProfitPercentage);
             if (takeProfitEnabled && currentPrice >= takeProfitPrice) {
                 String logMsg = String.format("Take-profit triggered at $%.2f. Selling.", currentPrice);
@@ -155,7 +178,7 @@ public class TradingService {
                 return;
             }
 
-            // 2. Check for Trailing Stop-Loss condition
+            // 2. Check for Trailing Stop-Loss to protect profits.
             double trailingStopPrice = highestPriceSinceBuy * (1 - trailingStopPercentage);
             if (trailingStopEnabled && currentPrice <= trailingStopPrice) {
                 String logMsg = String.format("Trailing stop-loss triggered at $%.2f (peak was $%.2f). Selling.", currentPrice, highestPriceSinceBuy);
@@ -166,19 +189,20 @@ public class TradingService {
                 return;
             }
 
-            // 3. Check for initial Stop-Loss condition (acts as a safety net)
-            double initialStopPrice = purchasePrice * (1 - stopLossPercentage);
-            if (currentPrice <= initialStopPrice) {
-                String logMsg = String.format("Initial stop-loss triggered at $%.2f. Selling.", currentPrice);
+            // 3. Check for ATR-based stop-loss as the primary risk management tool.
+            double atr = calculateAtr();
+            double atrStopPrice = purchasePrice - (atr * atrMultiplier);
+            if (atr > 0 && currentPrice <= atrStopPrice) {
+                String logMsg = String.format("ATR stop-loss triggered at $%.2f. Selling.", currentPrice);
                 addLogEntry(logMsg);
-                notificationService.sendTradeNotification("Trading Bot: Stop-Loss Executed", logMsg);
+                notificationService.sendTradeNotification("Trading Bot: ATR Stop Executed", logMsg);
                 sell();
                 resetMovingAverages(shortMA, longMA);
                 return;
             }
         }
 
-        // UPDATED LOGIC: Added RSI check to buy and sell signals
+        // --- Entry and Indicator-Based Exit Logic ---
         boolean isBullish = this.lastKnownRsi > 50;
         boolean isBearish = this.lastKnownRsi < 50;
 
@@ -193,9 +217,9 @@ public class TradingService {
         resetMovingAverages(shortMA, longMA);
     }
 
-    private double calculateRsi() {
-        if (priceHistory.size() < rsiPeriod + 1) {
-            return 0.0; // Not enough data
+    private double calculateRsi(List<Double> prices) {
+        if (prices.size() < rsiPeriod + 1) {
+            return 0.0;
         }
 
         List<Double> gains = new ArrayList<>();
@@ -229,18 +253,34 @@ public class TradingService {
      * Places a BUY order using a direct POST request to the Alpaca API.
      */
     private void buy(double currentPrice) {
-        System.out.printf("Attempting to place BUY order for $%.2f of %s%n", tradeAmountUsd, symbol);
-        String url = baseUrl + "/v2/orders";
-
-        OrderRequest orderRequest = new OrderRequest(symbol, null, String.valueOf(tradeAmountUsd), "buy", "market", "gtc");
-        HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
-
         try {
+            // Step 1: Fetch current account equity before trading
+            AlpacaAccount account = getAccountStatus();
+            if (account == null) {
+                String errorMsg = "Could not fetch account equity. Skipping buy order.";
+                System.err.println(errorMsg);
+                addLogEntry(errorMsg);
+                return;
+            }
+
+            // Step 2: Calculate the trade size in dollars based on risk percentage
+            double notionalAmount = account.getEquity() * riskPercentage;
+
+            System.out.printf("Attempting to place BUY order for $%.2f (%.2f%% of equity)%n", notionalAmount, riskPercentage * 100);
+
+            // Step 3: Place the order using the dynamically calculated amount
+            String url = baseUrl + "/v2/orders";
+            OrderRequest orderRequest = new OrderRequest(symbol, null, String.valueOf(notionalAmount), "buy", "market", "gtc");
+            HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
+
             restTemplate.postForObject(url, requestEntity, String.class);
+
+            // Step 4: Update logs and notifications with the dynamic amount
             System.out.println("BUY order placed successfully!");
-            String message = String.format("BUY order placed for $%.2f of %s at price $%.2f", tradeAmountUsd, symbol, currentPrice);
+            String message = String.format("BUY order placed for $%.2f of %s at price $%.2f", notionalAmount, symbol, currentPrice);
             addLogEntry(message);
             notificationService.sendTradeNotification("Trading Bot: BUY Order Executed", message);
+
             inPosition = true;
             purchasePrice = currentPrice;
             highestPriceSinceBuy = currentPrice;
@@ -254,7 +294,7 @@ public class TradingService {
     /**
      * Places a SELL order by first getting the position quantity, then posting a sell order.
      */
-    private void sell() {
+    public void sell() {
         System.out.printf("Attempting to place SELL order for all %s%n", symbol);
         try {
             Position currentPosition = getPosition(symbol);
@@ -368,14 +408,56 @@ public class TradingService {
         }
     }
 
+    public AlpacaBar fetchLatestBarFromAlpaca() {
+        try {
+            String url = dataUrl + "/v1beta3/crypto/us/latest/bars?symbols=" + symbol;
+            HttpEntity<String> entity = new HttpEntity<>(apiHeaders);
+            ResponseEntity<AlpacaBarsResponse> response = restTemplate.exchange(
+                    url, HttpMethod.GET, entity, AlpacaBarsResponse.class);
+
+            if (response.getBody() != null && response.getBody().getBars() != null &&
+                    response.getBody().getBars().containsKey(symbol)) {
+                return response.getBody().getBars().get(symbol);
+            }
+        } catch (Exception e) {
+            System.err.println("Error fetching latest bar from Alpaca: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private double calculateAtr() {
+        if (barHistory.size() < atrPeriod + 1) {
+            return 0.0; // Not enough data
+        }
+
+        List<Double> trueRanges = new ArrayList<>();
+        // Start from the second-to-last bar to compare with the one before it
+        for (int i = barHistory.size() - atrPeriod; i < barHistory.size(); i++) {
+            AlpacaBar currentBar = barHistory.get(i);
+            AlpacaBar previousBar = barHistory.get(i - 1);
+
+            double highMinusLow = currentBar.getHigh() - currentBar.getLow();
+            double highMinusPrevClose = Math.abs(currentBar.getHigh() - previousBar.getClose());
+            double lowMinusPrevClose = Math.abs(currentBar.getLow() - previousBar.getClose());
+
+            double trueRange = Math.max(highMinusLow, Math.max(highMinusPrevClose, lowMinusPrevClose));
+            trueRanges.add(trueRange);
+        }
+
+        // Return the average of the true ranges
+        return trueRanges.stream().mapToDouble(d -> d).average().orElse(0.0);
+    }
+
+
+
     private void resetMovingAverages(double shortMA, double longMA) {
         this.previousShortMA = shortMA;
         this.previousLongMA = longMA;
     }
 
-    private double calculateMovingAverage(int period) {
-        if (priceHistory.size() < period) return 0.0;
-        List<Double> recentPrices = priceHistory.subList(priceHistory.size() - period, priceHistory.size());
+    private double calculateMovingAverage(List<Double> prices, int period) {
+        if (prices.size() < period) return 0.0;
+        List<Double> recentPrices = prices.subList(prices.size() - period, prices.size());
         return recentPrices.stream().mapToDouble(d -> d).average().orElse(0.0);
     }
 
@@ -520,7 +602,7 @@ public class TradingService {
 
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private static class AlpacaBar {
+    public static class AlpacaBar {
         @JsonProperty("c")
         private double close;
         @JsonProperty("h")
@@ -529,6 +611,14 @@ public class TradingService {
         private double low;
         @JsonProperty("o")
         private double open;
+
+        // ADD THIS CONSTRUCTOR
+        public AlpacaBar(double open, double high, double low, double close) {
+            this.open = open;
+            this.high = high;
+            this.low = low;
+            this.close = close;
+        }
 
         public double getClose() {
             return close;
