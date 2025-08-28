@@ -23,6 +23,9 @@ import java.util.stream.Collectors;
 import lombok.Setter;
 import lombok.Getter;
 
+import lombok.AllArgsConstructor;
+import lombok.NoArgsConstructor;
+
 @Service
 public class TradingService {
 
@@ -601,6 +604,8 @@ public class TradingService {
     }
 
     @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class AlpacaBar {
         @JsonProperty("c")
@@ -611,14 +616,6 @@ public class TradingService {
         private double low;
         @JsonProperty("o")
         private double open;
-
-        // ADD THIS CONSTRUCTOR
-        public AlpacaBar(double open, double high, double low, double close) {
-            this.open = open;
-            this.high = high;
-            this.low = low;
-            this.close = close;
-        }
 
         public double getClose() {
             return close;
