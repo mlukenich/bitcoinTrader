@@ -222,15 +222,15 @@ public class TradingService {
 
     private double calculateRsi(List<Double> prices) {
         if (prices.size() < rsiPeriod + 1) {
-            return 0.0;
+            return 0.0; // Return a neutral value if not enough data
         }
 
         List<Double> gains = new ArrayList<>();
         List<Double> losses = new ArrayList<>();
 
         // Calculate gains and losses for the last `rsiPeriod` changes
-        for (int i = priceHistory.size() - rsiPeriod; i < priceHistory.size(); i++) {
-            double change = priceHistory.get(i) - priceHistory.get(i - 1);
+        for (int i = prices.size() - rsiPeriod; i < prices.size(); i++) {
+            double change = prices.get(i) - prices.get(i - 1);
             if (change > 0) {
                 gains.add(change);
                 losses.add(0.0);
@@ -240,12 +240,11 @@ public class TradingService {
             }
         }
 
-        // Calculate average gain and loss
         double avgGain = gains.stream().mapToDouble(d -> d).average().orElse(0.0);
         double avgLoss = losses.stream().mapToDouble(d -> d).average().orElse(0.0);
 
         if (avgLoss == 0) {
-            return 100.0; // Prevent division by zero; max bullishness
+            return 100.0; // Max bullishness to prevent division by zero
         }
 
         double rs = avgGain / avgLoss;
