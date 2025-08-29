@@ -80,16 +80,19 @@ public class BotController {
 
     @GetMapping("/account")
     public Map<String, Object> getAccount() {
+        // Fetch total account equity
         TradingService.AlpacaAccount account = tradingService.getAccountStatus();
-        if (account != null) {
-            double dailyGainLoss = account.getEquity() - account.getLastEquity();
-            double dailyGainLossPercent = (dailyGainLoss / account.getLastEquity()) * 100;
 
+        // Fetch P/L for the specific Bitcoin position
+        Map<String, Object> positionPl = tradingService.getBtcPositionPl();
+        double unrealizedPl = (double) positionPl.get("unrealizedPl");
+        boolean isPositive = (boolean) positionPl.get("isPositive");
+
+        if (account != null) {
             return Map.of(
                     "equity", String.format("$%,.2f", account.getEquity()),
-                    "dailyGainLoss", String.format("%s$%,.2f", dailyGainLoss >= 0 ? "+" : "", dailyGainLoss),
-                    "dailyGainLossPercent", String.format("(%.2f%%)", dailyGainLossPercent),
-                    "gainLossColor", dailyGainLoss >= 0 ? "text-green-600" : "text-red-600"
+                    "positionGainLoss", String.format("%s$%,.2f", unrealizedPl >= 0 ? "+" : "", unrealizedPl),
+                    "gainLossColor", isPositive ? "text-green-300" : "text-red-400" // Colors for dark theme
             );
         }
         return Map.of(); // Return empty map on error
