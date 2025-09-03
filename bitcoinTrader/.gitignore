@@ -35,7 +35,7 @@ hs_err_pid*
 # Sensitive properties - VERY IMPORTANT
 # Add any file that contains secrets.
 # While your repo is private, this is best practice.
-application.properties
+#application.properties
 
 # Log and data files
 logs/

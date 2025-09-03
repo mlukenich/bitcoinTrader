@@ -21,6 +21,10 @@ public class TradingBotApplication {
         return new RestTemplate();
     }
 
+    /**
+     * main
+     * @param args
+     */
     public static void main(String[] args) {
         SpringApplication.run(TradingBotApplication.class, args);
     }
