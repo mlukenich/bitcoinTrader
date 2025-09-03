@@ -1,123 +1,77 @@
-/*
 package com.example.tradingbot;
 
 import com.example.tradingbot.service.BotStateService;
 import com.example.tradingbot.service.NotificationService;
 import com.example.tradingbot.service.TradingService;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
 
-import java.util.ArrayList;
-import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import static org.mockito.Mockito.*;
-
-/**
- * Unit tests for the TradingService.
- * We use Mockito to simulate dependencies and isolate the service's logic.
- *//*
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({MockitoExtension.class}) // Use curly braces for syntax safety
 class TradingServiceTest {
 
     @Mock
-    private BotStateService botStateService; // Mock the BotStateService dependency
-
+    private BotStateService botStateService;
     @Mock
-    private NotificationService notificationService; // Mock the NotificationService dependency
+    private NotificationService notificationService;
+    @Mock
+    private RestTemplate restTemplate; // Mockito will create a mock of this
 
-    @Spy // Use @Spy to allow calling real methods while still being able to stub others
-    @InjectMocks // Inject the mocks into this instance of TradingService
+    @InjectMocks // and inject all of the above mocks into our service
     private TradingService tradingService;
 
-    @BeforeEach
-    void setUp() {
-        // Set default configurations before each test
-        tradingService.setLongMaPeriod(10);
-        tradingService.setShortMaPeriod(3);
-        tradingService.setRsiPeriod(10);
-        // Make sure the buy/sell methods don't actually do anything, we just want to verify they are called
-        doNothing().when(tradingService).buy(anyDouble());
-        doNothing().when(tradingService).sell();
-    }
-
     @Test
-    void shouldPlaceBuyOrder_whenMaCrossesUp_andRsiIsBullish() {
-        // Arrange: Create a price history that will trigger a buy signal
-        List<TradingService.AlpacaBar> history = new ArrayList<>();
-        // Prices are low and flat initially
-        for (int i = 0; i < 15; i++) {
-            history.add(new TradingService.AlpacaBar(100, 100, 100, 100));
-        }
-        // Price starts trending up, causing a crossover and high RSI
-        history.add(new TradingService.AlpacaBar(101, 101, 101, 101));
-        history.add(new TradingService.AlpacaBar(102, 102, 102, 102));
-        history.add(new TradingService.AlpacaBar(103, 103, 103, 103));
+    void buy_shouldFormatNotionalValueToTwoDecimalPlaces() {
+        // --- ARRANGE ---
+        // 1. Create a fake account object with an equity that will produce a long decimal
+        TradingService.AlpacaAccount fakeAccount = new TradingService.AlpacaAccount();
+        fakeAccount.setEquity(10000.12345);
 
-        // Use the real bar history
-        tradingService.getBarHistory().addAll(history);
-        // Set the state to not be in a position
-        tradingService.setInPosition(false);
+        // 2. Wrap the fake account in a ResponseEntity, which is what RestTemplate actually returns
+        ResponseEntity<TradingService.AlpacaAccount> fakeResponse = new ResponseEntity<>(fakeAccount, HttpStatus.OK);
 
-        // Define what the "latest" bar will be when the method is called
-        TradingService.AlpacaBar latestBar = new TradingService.AlpacaBar(104, 104, 104, 104);
-        doReturn(latestBar).when(tradingService).fetchLatestBarFromAlpaca();
+        // 3. THIS IS THE FIX: Mock the RestTemplate's exchange method.
+        // Tell Mockito: "When the exchange method is called for an AlpacaAccount, return our fake response."
+        when(restTemplate.exchange(
+                anyString(),
+                eq(HttpMethod.GET),
+                any(),
+                eq(TradingService.AlpacaAccount.class)
+        )).thenReturn(fakeResponse);
 
-        // Act: Run the strategy
-        tradingService.executeStrategy();
+        // 4. Set the risk percentage for the test
+        tradingService.setRiskPercentage(0.02);
 
-        // Assert: Verify that the buy method was called exactly once
-        verify(tradingService, times(1)).buy(104.0);
-        verify(tradingService, never()).sell(); // Ensure sell was not called
-    }
+        // --- ACT ---
+        // Call the buy method. It will internally call getAccountStatus(), which will trigger our mock.
+        tradingService.buy(60000.00);
 
-    @Test
-    void shouldSell_whenTakeProfitIsTriggered() {
-        // Arrange: Set up the state for an open position
-        tradingService.setInPosition(true);
-        tradingService.setPurchasePrice(100.0);
-        tradingService.setTakeProfitEnabled(true);
-        tradingService.setTakeProfitPercentage(0.10); // 10% take profit
+        // --- ASSERT ---
+        // 1. Create an ArgumentCaptor to capture the HttpEntity sent to RestTemplate's POST call
+        ArgumentCaptor<HttpEntity> httpEntityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
 
-        // Populate enough history to pass the initial data gathering phase
-        for (int i = 0; i < 15; i++) {
-            tradingService.getBarHistory().add(new TradingService.AlpacaBar(100, 100, 100, 100));
-        }
+        // 2. Verify that postForObject was called, and capture the argument
+        verify(restTemplate).postForObject(anyString(), httpEntityCaptor.capture(), any());
 
-        // Define the latest bar to be a price that hits the 10% take-profit target ($110)
-        TradingService.AlpacaBar latestBar = new TradingService.AlpacaBar(110, 110, 110, 110);
-        doReturn(latestBar).when(tradingService).fetchLatestBarFromAlpaca();
+        // 3. Get the captured OrderRequest and check its notional value
+        TradingService.OrderRequest capturedRequest = (TradingService.OrderRequest) httpEntityCaptor.getValue().getBody();
 
-        // Act: Run the strategy
-        tradingService.executeStrategy();
-
-        // Assert: Verify that the sell method was called because the take-profit was hit
-        verify(tradingService, times(1)).sell();
-        verify(tradingService, never()).buy(anyDouble()); // Ensure buy was not called
+        // The formatted string should be "200.00"
+        assertThat(capturedRequest.getNotional()).isEqualTo("200.00");
     }
 }
-*/
-// NOTE: You may need to add a constructor to the AlpacaBar class for these tests to work.
-// Inside TradingService.java, add this constructor to the AlpacaBar class:
-/*
-    @Data
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private static class AlpacaBar {
-        @JsonProperty("c") private double close;
-        @JsonProperty("h") private double high;
-        @JsonProperty("l") private double low;
-        @JsonProperty("o") private double open;
-
-        // ADD THIS CONSTRUCTOR
-        public AlpacaBar(double open, double high, double low, double close) {
-            this.open = open;
-            this.high = high;
-            this.low = low;
-            this.close = close;
-        }
-    }
-*/

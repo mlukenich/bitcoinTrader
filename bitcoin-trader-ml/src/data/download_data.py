@@ -9,7 +9,7 @@ INTERVAL = "1h"     # We want hourly data for our higher-frequency bot
 DATA_DIR = "data/raw"
 
 # yfinance allows fetching a maximum of 730 days of hourly data in one go
-START_DATE = date.today() - timedelta(days = 60)
+START_DATE = date.today() - timedelta(days = 500)
 END_DATE = date.today()
 
 def download_btc_data():

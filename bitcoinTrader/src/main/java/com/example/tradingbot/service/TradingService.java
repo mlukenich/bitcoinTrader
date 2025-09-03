@@ -32,7 +32,7 @@ public class TradingService {
 
     private final BotStateService botStateService;
     private final NotificationService notificationService;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
     private static final Logger logger = LoggerFactory.getLogger(TradingService.class);
 
 
@@ -53,6 +53,7 @@ public class TradingService {
     private int longMaPeriod;
     @Value("${trading.rsi-period}")
     private int rsiPeriod;
+    @Setter
     @Value("${trading.risk.percentage}")
     private double riskPercentage;
     @Value("${trading.initial-stop-loss.percentage}")
@@ -84,9 +85,10 @@ public class TradingService {
     private double highestPriceSinceBuy = 0.0;
     private HttpHeaders apiHeaders;
 
-    public TradingService(BotStateService botStateService, NotificationService notificationService) {
+    public TradingService(BotStateService botStateService, NotificationService notificationService, RestTemplate restTemplate) {
         this.botStateService = botStateService;
         this.notificationService = notificationService;
+        this.restTemplate = restTemplate;
     }
 
     @PostConstruct
@@ -115,6 +117,13 @@ public class TradingService {
             }
         } else {
             logger.info("No state file found. Starting with a fresh price history.");
+        }
+
+        // If we have enough historical data from the file, perform an initial
+        // calculation to populate the indicators immediately on startup.
+        if (this.priceHistory.size() >= rsiPeriod + 1) {
+            logger.info("Performing initial indicator calculation from loaded history...");
+            this.lastKnownRsi = calculateRsi();
         }
 
         // Finally, synchronize the position state with Alpaca
@@ -217,7 +226,7 @@ public class TradingService {
         resetMovingAverages(shortMA, longMA);
     }
 
-    private void buy(double currentPrice) {
+    public void buy(double currentPrice) {
         try {
             AlpacaAccount account = getAccountStatus();
             if (account == null) {
@@ -228,7 +237,8 @@ public class TradingService {
             System.out.printf("Attempting to place BUY order for $%.2f%n", notionalAmount);
 
             String url = baseUrl + "/v2/orders";
-            OrderRequest orderRequest = new OrderRequest(symbol, null, String.valueOf(notionalAmount), "buy", "market", "gtc");
+            String formattedNotional = String.format("%.2f", notionalAmount);
+            OrderRequest orderRequest = new OrderRequest(symbol, null, formattedNotional, "buy", "market", "gtc");
             HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
             restTemplate.postForObject(url, requestEntity, String.class);
 
@@ -386,7 +396,7 @@ public class TradingService {
 
     // --- Helper Classes for JSON ---
     @Data @NoArgsConstructor @AllArgsConstructor
-    private static class OrderRequest {
+    public static class OrderRequest {
         private String symbol;
         private String qty;
         private String notional;
