@@ -3,7 +3,10 @@ package com.example.tradingbot.service;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -18,17 +21,25 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
 @Service
 public class TradingService {
 
     private final BotStateService botStateService;
     private final NotificationService notificationService;
     private final RestTemplate restTemplate = new RestTemplate();
+    private static final Logger logger = LoggerFactory.getLogger(TradingService.class);
+
 
     // --- Injected Configuration Values ---
-    @Value("${alpaca.api.key}")
+    @Value("${ALPCA_API_KEY:${alpaca.api.key}}")
     private String apiKey;
-    @Value("${alpaca.api.secret}")
+    @Value("${ALPCA_API_SECRET:${alpaca.api.secret}}")
     private String apiSecret;
     @Value("${alpaca.api.base-url}")
     private String baseUrl;
@@ -54,6 +65,8 @@ public class TradingService {
     private boolean trailingStopEnabled;
     @Value("${trading.trailing-stop.percentage}")
     private double trailingStopPercentage;
+    @Value("${bot.state.filepath}")
+    private String stateFilepath;
 
     // --- State Variables ---
     private final List<Double> priceHistory = Collections.synchronizedList(new ArrayList<>());
@@ -77,12 +90,54 @@ public class TradingService {
     }
 
     @PostConstruct
-    public void init() {
+    public void loadStateOnStartup() {
+        // First, set up the API headers
         this.apiHeaders = new HttpHeaders();
         this.apiHeaders.set("APCA-API-KEY-ID", apiKey);
         this.apiHeaders.set("APCA-API-SECRET-KEY", apiSecret);
         this.apiHeaders.setContentType(MediaType.APPLICATION_JSON);
+
+        // Next, try to load the price history from the file
+        File stateFile = new File(stateFilepath);
+        if (stateFile.exists()) {
+            try {
+                ObjectMapper objectMapper = new ObjectMapper();
+                String json = new String(Files.readAllBytes(Paths.get(stateFilepath)));
+                // De-serialize the JSON from the file into our list
+                this.priceHistory.addAll(objectMapper.readValue(json, new TypeReference<List<Double>>() {}));
+
+                if (!priceHistory.isEmpty()) {
+                    this.lastKnownPrice = priceHistory.get(priceHistory.size() - 1);
+                }
+                logger.info("Successfully loaded {} price history records from {}", priceHistory.size(), stateFilepath);
+            } catch (Exception e) {
+                logger.error("Could not load price history from file, starting fresh.", e);
+            }
+        } else {
+            logger.info("No state file found. Starting with a fresh price history.");
+        }
+
+        // Finally, synchronize the position state with Alpaca
         synchronizePositionState();
+    }
+
+    @PreDestroy
+    public void saveStateOnShutdown() {
+        try {
+            ObjectMapper objectMapper = new ObjectMapper();
+            // Serialize the priceHistory list to a JSON string
+            String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(this.priceHistory);
+
+            // Ensure the directory exists
+            File stateFile = new File(stateFilepath);
+            stateFile.getParentFile().mkdirs();
+
+            // Write the JSON string to the file
+            Files.writeString(Paths.get(stateFilepath), json);
+            logger.info("Successfully saved {} price history records to {}", priceHistory.size(), stateFilepath);
+        } catch (Exception e) {
+            logger.error("Could not save price history to file.", e);
+        }
     }
 
     public void executeStrategy() {
@@ -316,7 +371,7 @@ public class TradingService {
         return 100 - (100 / (1 + rs));
     }
 
-    private void addLogEntry(String message) {
+    public void addLogEntry(String message) {
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
         activityLog.add(0, String.format("[%s] %s", timestamp, message));
         while (activityLog.size() > 20) {

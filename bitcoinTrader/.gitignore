@@ -36,3 +36,7 @@ hs_err_pid*
 # Add any file that contains secrets.
 # While your repo is private, this is best practice.
 application.properties
+
+# Log and data files
+logs/
+data/

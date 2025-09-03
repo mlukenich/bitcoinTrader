@@ -1,0 +1,8 @@
+pandas
+yfinance
+pandas-ta
+scikit-learn
+xgboost
+joblib
+matplotlib
+imbalanced-learn

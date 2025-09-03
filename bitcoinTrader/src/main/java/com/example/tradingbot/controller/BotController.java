@@ -30,6 +30,7 @@ public class BotController {
     @GetMapping("/start")
     public String startBot() {
         botStateService.start();
+        tradingService.addLogEntry("Bot has been STARTED.");
         return "Bot has been STARTED. Check the console for trading activity.";
     }
 
@@ -40,6 +41,7 @@ public class BotController {
     @GetMapping("/stop")
     public String stopBot() {
         botStateService.stop();
+        tradingService.addLogEntry("Bot has been STOPPED.");
         return "Bot has been STOPPED. No further trades will be executed.";
     }
 
