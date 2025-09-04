@@ -5,7 +5,7 @@ import pandas_ta as ta
 # --- Configuration ---
 TICKER = "BTC-USD"
 RAW_DATA_DIR = "data/raw"
-PROCESSED_DIR = "data/processed" # Let's create a new subfolder
+PROCESSED_DIR = "data/processed"
 
 # --- Labeling Configuration (for hourly data) ---
 FORWARD_WINDOW = 24  # Look forward 24 hours
@@ -14,12 +14,11 @@ STOP_LOSS = 0.01  # 1% stop-loss
 
 def process_btc_data():
     """
-    Loads raw hourly data, calculates features (indicators), creates a
-    target label, and saves the processed data to a new CSV file.
+    Loads raw hourly data, calculates base features, creates lagged features,
+    creates a target label, and saves the processed data.
     """
     print(f"--- Starting Data Processing for {TICKER} ---")
 
-    # Ensure the output directory exists
     if not os.path.exists(PROCESSED_DIR):
         os.makedirs(PROCESSED_DIR)
 
@@ -28,22 +27,34 @@ def process_btc_data():
         print(f"Error: Raw data file not found at {file_path}")
         return
 
-    # Load the raw data
+    # --- THIS IS THE CORRECTED LINE ---
+    # It now includes skiprows=[1] to skip the junk "Ticker" row.
     df = pd.read_csv(file_path, header=0, index_col=0, skiprows=[1], parse_dates=True)
     df.index.name = 'Date'
+    print(f"Loaded {len(df)} rows of raw data.")
 
-    # --- 1. Feature Engineering ---
-    # Use longer periods suitable for hourly data
+    # --- 1. Feature Engineering - Base Indicators ---
+    print("Calculating base indicators...")
     df.ta.sma(length=20, append=True)
     df.ta.sma(length=100, append=True)
     df.ta.rsi(length=14, append=True)
     df.ta.macd(append=True)
-    df.ta.bbands(length=20, append=True) # 20-hour Bollinger Bands
+    df.ta.bbands(length=20, append=True)
     df.ta.atr(length=14, append=True)
     df.ta.adx(length=14, append=True)
     df.ta.obv(append=True)
 
-    # --- 2. Labeling ---
+    # --- 2. Feature Engineering - Lagged Features ---
+    print("Creating lagged features...")
+    indicators_to_lag = ['RSI_14', 'MACDh_12_26_9', 'BBP_20_2.0', 'OBV']
+    lag_periods = [1, 3, 6, 12]
+
+    for indicator in indicators_to_lag:
+        for lag in lag_periods:
+            df[f'{indicator}_lag_{lag}'] = df[indicator].shift(lag)
+
+    # --- 3. Labeling ---
+    print("Creating target labels...")
     df['target'] = 0
     for i in range(len(df) - FORWARD_WINDOW):
         entry_price = df['Close'].iloc[i]
@@ -58,8 +69,9 @@ def process_btc_data():
             if future_price <= loss_price:
                 break
 
-    # --- 3. Clean and Save ---
+    # --- 4. Clean and Save ---
     df.dropna(inplace=True)
+    print(f"Data cleaned. Final dataset has {len(df)} rows.")
 
     processed_file_path = os.path.join(PROCESSED_DIR, f"{TICKER}_processed.csv")
     df.to_csv(processed_file_path)
