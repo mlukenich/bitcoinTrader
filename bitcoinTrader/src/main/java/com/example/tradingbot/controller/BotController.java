@@ -99,5 +99,10 @@ public class BotController {
         }
         return Map.of(); // Return empty map on error
     }
+
+    @GetMapping("/api/chart-data")
+    public Map<String, List<?>> getChartData() {
+        return tradingService.getChartData();
+    }
 }
 

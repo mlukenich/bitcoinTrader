@@ -1,11 +1,12 @@
 <!DOCTYPE html>
-<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trading Bot Control</title>
+    <title>Bitcoin Trader Dashboard</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         @keyframes pulse {
             0%, 100% { opacity: 1; }
@@ -18,10 +19,10 @@
 </head>
 <body class="bg-slate-900 flex items-center justify-center min-h-screen font-sans">
 
-<div class="w-full max-w-2xl bg-slate-800 rounded-2xl shadow-lg p-8">
+<div class="w-full max-w-4xl bg-slate-800 rounded-2xl shadow-lg p-8">
 
     <div class="flex flex-col items-center mb-6 text-center">
-        <svg class="w-16 h-16 text-blue-500 mb-4" xmlns="http://www.w.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+        <svg class="w-16 h-16 text-blue-500 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />
         </svg>
         <h1 class="text-3xl font-bold text-slate-100">Bitcoin Trading Bot</h1>
@@ -36,35 +37,41 @@
                 <p id="account-equity" class="text-3xl font-bold text-slate-100">---</p>
             </div>
             <div>
-                <p class="text-lg text-slate-400">Today's P/L</p>
+                <p class="text-lg text-slate-400">Position P/L</p>
                 <p id="account-gain-loss" class="text-3xl font-bold text-slate-100">---</p>
             </div>
         </div>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-        <div class="text-center">
-            <div class="mb-6">
-                <p class="text-lg text-slate-400">Current BTC Price</p>
-                <p id="current-price" class="text-4xl font-bold text-slate-100">---</p>
-                <p class="text-md text-slate-400 mt-2">RSI (14)</p>
-                <p id="current-rsi" class="text-2xl font-semibold text-slate-200">---</p>
-            </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
-            <div id="status-container" class="mb-6 p-4 rounded-lg transition-colors duration-300">
-                <p id="status-text" class="text-lg font-semibold">Checking status...</p>
-            </div>
-            <div class="flex justify-center space-x-4">
-                <button id="startBtn" class="w-full bg-green-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-700">Start</button>
-                <button id="stopBtn" class="w-full bg-red-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-red-700">Stop</button>
-            </div>
-            <p id="response" class="mt-6 text-slate-400 min-h-[24px]"></p>
+        <div class="lg:col-span-2 bg-slate-900/50 p-4 rounded-lg">
+            <h2 class="text-xl font-bold text-slate-200 mb-4 text-center">Price Chart</h2>
+            <canvas id="priceChart"></canvas>
         </div>
 
-        <div class="bg-slate-900/50 p-4 rounded-lg h-80 overflow-y-auto">
-            <h2 class="text-xl font-bold text-slate-200 mb-4 text-center">Recent Activity</h2>
-            <div id="activity-log" class="space-y-2 text-sm text-slate-400">
-                <p>No activity yet...</p>
+        <div class="space-y-4">
+            <div class="text-center p-4 rounded-lg bg-slate-900/50">
+                <div class="mb-4">
+                    <p class="text-lg text-slate-400">Current BTC Price</p>
+                    <p id="current-price" class="text-2xl font-bold text-slate-100">---</p>
+                </div>
+                <div class="mb-4">
+                    <p class="text-md text-slate-400">RSI (14)</p>
+                    <p id="current-rsi" class="text-xl font-semibold text-slate-200">---</p>
+                </div>
+                <div id="status-container" class="mb-4 p-4 rounded-lg transition-colors duration-300">
+                    <p id="status-text" class="text-lg font-semibold">Checking status...</p>
+                </div>
+                <div class="flex justify-center space-x-4">
+                    <button id="startBtn" class="w-full bg-green-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-700">Start</button>
+                    <button id="stopBtn" class="w-full bg-red-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-700">Stop</button>
+                </div>
+                <p id="response" class="mt-4 text-slate-400 min-h-[20px]"></p>
+            </div>
+            <div class="bg-slate-900/50 p-4 rounded-lg h-80 overflow-y-auto">
+                <h2 class="text-xl font-bold text-slate-200 mb-4 text-center">Recent Activity</h2>
+                <div id="activity-log" class="space-y-2 text-sm text-slate-400"></div>
             </div>
         </div>
     </div>
@@ -81,13 +88,52 @@
     const currentRsiText = document.getElementById('current-rsi');
     const accountEquityText = document.getElementById('account-equity');
     const accountGainLossText = document.getElementById('account-gain-loss');
+    const ctx = document.getElementById('priceChart');
+    let priceChart;
+
+    function initializeChart() {
+        priceChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Price', data: [], borderColor: 'rgb(59, 130, 246)', tension: 0.1, pointRadius: 0
+                }, {
+                    label: 'Short MA', data: [], borderColor: 'rgb(250, 204, 21)', borderDash: [5, 5], tension: 0.1, pointRadius: 0
+                }, {
+                    label: 'Long MA', data: [], borderColor: 'rgb(239, 68, 68)', tension: 0.1, pointRadius: 0
+                }]
+            },
+            options: {
+                scales: {
+                    y: { ticks: { color: '#94a3b8' } },
+                    x: { ticks: { color: '#94a3b8', display: false } }
+                },
+                plugins: {
+                    legend: { labels: { color: '#cbd5e1' } }
+                },
+                animation: { duration: 0 }
+            }
+        });
+    }
+
+    async function updateChart() {
+        try {
+            const response = await fetch('/api/chart-data');
+            const data = await response.json();
+            if (priceChart && data.prices) {
+                priceChart.data.labels = Array.from(Array(data.prices.length).keys());
+                priceChart.data.datasets[0].data = data.prices;
+                priceChart.data.datasets[1].data = data.shortMas;
+                priceChart.data.datasets[2].data = data.longMas;
+                priceChart.update('none');
+            }
+        } catch (error) { console.error("Error fetching chart data:", error); }
+    }
 
     function setStatus(state, message) {
         statusText.textContent = message;
-        // UPDATED: Remove old light theme classes and add new dark theme classes
-        statusContainer.classList.remove('bg-gray-200', 'bg-green-100', 'text-green-800', 'bg-red-100', 'text-red-800', 'animate-pulse-running');
-        statusContainer.classList.remove('bg-slate-600', 'bg-green-500/20', 'text-green-300', 'bg-red-500/20', 'text-red-300');
-
+        statusContainer.classList.remove('bg-slate-600', 'bg-green-500/20', 'text-green-300', 'bg-red-500/20', 'text-red-300', 'animate-pulse-running');
         if (state === 'RUNNING') {
             statusContainer.classList.add('bg-green-500/20', 'text-green-300', 'animate-pulse-running');
         } else if (state === 'STOPPED') {
@@ -102,7 +148,6 @@
             const response = await fetch('/status');
             if (!response.ok) throw new Error('Server not reachable');
             const text = await response.text();
-
             if (text.toLowerCase().includes('running') || text.toLowerCase().includes('gathering') || text.toLowerCase().includes('monitoring')) {
                 setStatus('RUNNING', text);
             } else {
@@ -115,26 +160,21 @@
 
     async function updateActivityLog() {
         try {
-            const response = await fetch('/activity');
+            const response = await fetch('/api/activity');
             if (!response.ok) return;
             const logEntries = await response.json();
-
             activityLog.innerHTML = '';
-
             if (logEntries.length === 0) {
                 activityLog.innerHTML = '<p>No activity yet...</p>';
                 return;
             }
-
             logEntries.forEach(entry => {
                 const p = document.createElement('p');
                 p.textContent = entry;
                 p.className = 'border-b border-slate-700 pb-1';
                 activityLog.appendChild(p);
             });
-        } catch (error) {
-            // Silently fail on activity log
-        }
+        } catch (error) {}
     }
 
     async function updatePrice() {
@@ -146,13 +186,11 @@
                 return;
             };
             const data = await response.json();
-
             if (data.price > 0) {
                 currentPriceText.textContent = data.formattedPrice;
             } else {
                 currentPriceText.textContent = '---';
             }
-
             if (data.rsi > 0) {
                 currentRsiText.textContent = data.formattedRsi;
             } else {
@@ -169,7 +207,6 @@
             const response = await fetch('/account');
             if (!response.ok) throw new Error('Failed to fetch account');
             const data = await response.json();
-
             if (data.equity) {
                 accountEquityText.textContent = data.equity;
                 accountGainLossText.textContent = data.positionGainLoss;
@@ -183,6 +220,7 @@
 
     async function sendCommand(command) {
         try {
+            responseP.textContent = `Sending '${command}' command...`;
             const response = await fetch(`/${command}`);
             const text = await response.text();
             responseP.textContent = text;
@@ -196,19 +234,21 @@
     stopBtn.addEventListener('click', () => sendCommand('stop'));
 
     document.addEventListener('DOMContentLoaded', () => {
+        initializeChart();
         setStatus('INITIAL', 'Checking status...');
-
         updateStatus();
         updateActivityLog();
         updatePrice();
         updateAccountInfo();
+        updateChart();
 
         setInterval(() => {
             updateStatus();
             updateActivityLog();
             updatePrice();
             updateAccountInfo();
-        }, 5000);
+            updateChart();
+        }, 10000); // Increased polling to 10 seconds
     });
 </script>
 

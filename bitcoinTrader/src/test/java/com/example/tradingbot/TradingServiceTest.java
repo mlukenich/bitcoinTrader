@@ -1,11 +1,13 @@
 package com.example.tradingbot;
 
+import com.example.tradingbot.model.BotState;
+import com.example.tradingbot.repository.BotStateRepository;
 import com.example.tradingbot.service.BotStateService;
 import com.example.tradingbot.service.NotificationService;
 import com.example.tradingbot.service.TradingService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -15,63 +17,85 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import java.util.Map;
+import java.util.Optional;
 
-@ExtendWith({MockitoExtension.class}) // Use curly braces for syntax safety
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
 class TradingServiceTest {
 
+    @Mock
+    private BotStateRepository botStateRepository;
     @Mock
     private BotStateService botStateService;
     @Mock
     private NotificationService notificationService;
     @Mock
-    private RestTemplate restTemplate; // Mockito will create a mock of this
+    private RestTemplate restTemplate;
 
-    @InjectMocks // and inject all of the above mocks into our service
+    @InjectMocks
     private TradingService tradingService;
 
+    private BotState testState;
+
+    @BeforeEach
+    void setUp() {
+        // 1. Setup the bot's state
+        testState = new BotState();
+        testState.setInPosition(false);
+        // Add just enough price history to get started
+        for (int i = 0; i < 51; i++) {
+            testState.getPriceHistory().add(100.0);
+        }
+
+        when(botStateRepository.findById(1L)).thenReturn(Optional.of(testState));
+        when(botStateRepository.save(any(BotState.class))).thenReturn(testState);
+
+        // 2. Set simple strategy parameters for a clear signal
+        tradingService.setSymbol("BTC/USD");
+        tradingService.setShortMaPeriod(10);
+        tradingService.setLongMaPeriod(50);
+        tradingService.setRsiPeriod(14);
+        tradingService.setRiskPercentage(0.01);
+
+        // 3. Initialize the service to load the mocked state
+        tradingService.init();
+    }
+
     @Test
-    void buy_shouldFormatNotionalValueToTwoDecimalPlaces() {
+    void shouldPlaceBuyOrder_whenConditionsAreMet() {
         // --- ARRANGE ---
-        // 1. Create a fake account object with an equity that will produce a long decimal
+        // 1. Mock the API response for the price fetch
+        TradingService.AlpacaBar fakeBar = new TradingService.AlpacaBar(110, 110, 110, 110);
+        TradingService.AlpacaBarsResponse fakeBarsResponse = new TradingService.AlpacaBarsResponse();
+        fakeBarsResponse.setBars(Map.of("BTC/USD", fakeBar));
+        ResponseEntity<TradingService.AlpacaBarsResponse> fakePriceResponse = new ResponseEntity<>(fakeBarsResponse, HttpStatus.OK);
+        when(restTemplate.exchange(contains("/v1beta3/crypto"), eq(HttpMethod.GET), any(), eq(TradingService.AlpacaBarsResponse.class)))
+                .thenReturn(fakePriceResponse);
+
+        // 2. Mock the account status for the buy() method
         TradingService.AlpacaAccount fakeAccount = new TradingService.AlpacaAccount();
-        fakeAccount.setEquity(10000.12345);
+        fakeAccount.setEquity(10000.0);
+        ResponseEntity<TradingService.AlpacaAccount> fakeAccountResponse = new ResponseEntity<>(fakeAccount, HttpStatus.OK);
+        when(restTemplate.exchange(contains("/v2/account"), eq(HttpMethod.GET), any(), eq(TradingService.AlpacaAccount.class)))
+                .thenReturn(fakeAccountResponse);
 
-        // 2. Wrap the fake account in a ResponseEntity, which is what RestTemplate actually returns
-        ResponseEntity<TradingService.AlpacaAccount> fakeResponse = new ResponseEntity<>(fakeAccount, HttpStatus.OK);
+        // 3. Manually create a crossover scenario
+        testState.setPreviousShortMA(99.0);
+        testState.setPreviousLongMA(100.0);
 
-        // 3. THIS IS THE FIX: Mock the RestTemplate's exchange method.
-        // Tell Mockito: "When the exchange method is called for an AlpacaAccount, return our fake response."
-        when(restTemplate.exchange(
-                anyString(),
-                eq(HttpMethod.GET),
-                any(),
-                eq(TradingService.AlpacaAccount.class)
-        )).thenReturn(fakeResponse);
-
-        // 4. Set the risk percentage for the test
-        tradingService.setRiskPercentage(0.02);
+        // 4. Force a high RSI to ensure the signal fires
+        TradingService spyTradingService = spy(tradingService);
+        doReturn(60.0).when(spyTradingService).calculateRsi(any());
 
         // --- ACT ---
-        // Call the buy method. It will internally call getAccountStatus(), which will trigger our mock.
-        tradingService.buy(60000.00);
+        spyTradingService.executeStrategy();
 
         // --- ASSERT ---
-        // 1. Create an ArgumentCaptor to capture the HttpEntity sent to RestTemplate's POST call
-        ArgumentCaptor<HttpEntity> httpEntityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-
-        // 2. Verify that postForObject was called, and capture the argument
-        verify(restTemplate).postForObject(anyString(), httpEntityCaptor.capture(), any());
-
-        // 3. Get the captured OrderRequest and check its notional value
-        TradingService.OrderRequest capturedRequest = (TradingService.OrderRequest) httpEntityCaptor.getValue().getBody();
-
-        // The formatted string should be "200.00"
-        assertThat(capturedRequest.getNotional()).isEqualTo("200.00");
+        // Verify that the buy order was placed
+        verify(restTemplate, times(1)).postForObject(contains("/v2/orders"), any(HttpEntity.class), eq(String.class));
     }
 }
