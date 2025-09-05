@@ -2,6 +2,8 @@ package com.example.tradingbot.controller;
 
 import com.example.tradingbot.service.BotStateService;
 import com.example.tradingbot.service.TradingService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -17,6 +19,8 @@ public class BotController {
 
     private final BotStateService botStateService;
     private final TradingService tradingService;
+    private static final Logger logger = LoggerFactory.getLogger(BotController.class);
+
 
     public BotController(BotStateService botStateService, TradingService tradingService) {
         this.botStateService = botStateService;
@@ -25,28 +29,33 @@ public class BotController {
 
     /**
      * Endpoint to start the bot.
+     *
      * @return A confirmation message.
      */
     @GetMapping("/start")
     public String startBot() {
         botStateService.start();
+        logger.info("Bot has been STARTED.");
         tradingService.addLogEntry("Bot has been STARTED.");
         return "Bot has been STARTED. Check the console for trading activity.";
     }
 
     /**
      * Endpoint to stop the bot.
+     *
      * @return A confirmation message.
      */
     @GetMapping("/stop")
     public String stopBot() {
         botStateService.stop();
+        logger.info("Bot has been STOPPED.");
         tradingService.addLogEntry("Bot has been STOPPED.");
         return "Bot has been STOPPED. No further trades will be executed.";
     }
 
     /**
      * Endpoint to get the current status of the bot.
+     *
      * @return The bot's current status ("RUNNING" or "STOPPED").
      */
     @GetMapping("/status")
@@ -56,6 +65,7 @@ public class BotController {
 
     /**
      * Endpoint to get the recent activity log.
+     *
      * @return A list of log messages.
      */
     @GetMapping("/activity") //
@@ -65,6 +75,7 @@ public class BotController {
 
     /**
      * Endpoint to get the last known price
+     *
      * @return last known bitcoin price
      */
     @GetMapping("/price")
@@ -80,6 +91,11 @@ public class BotController {
         );
     }
 
+    /**
+     * Endpoint to get account information.
+     *
+     * @return A map containing account equity and position P/L.
+     */
     @GetMapping("/account")
     public Map<String, Object> getAccount() {
         // Fetch total account equity
@@ -100,9 +116,13 @@ public class BotController {
         return Map.of(); // Return empty map on error
     }
 
+    /**
+     * Endpoint to get chart data.
+     *
+     * @return A map containing data for the chart.
+     */
     @GetMapping("/api/chart-data")
     public Map<String, List<?>> getChartData() {
         return tradingService.getChartData();
     }
 }
-

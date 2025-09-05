@@ -24,6 +24,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
+/**
+ * Unit tests for the {@link TradingService}.
+ */
 @ExtendWith(MockitoExtension.class)
 class TradingServiceTest {
 
@@ -46,7 +49,6 @@ class TradingServiceTest {
         // 1. Setup the bot's state
         testState = new BotState();
         testState.setInPosition(false);
-        // Add just enough price history to get started
         for (int i = 0; i < 51; i++) {
             testState.getPriceHistory().add(100.0);
         }
@@ -68,6 +70,7 @@ class TradingServiceTest {
     @Test
     void shouldPlaceBuyOrder_whenConditionsAreMet() {
         // --- ARRANGE ---
+
         // 1. Mock the API response for the price fetch
         TradingService.AlpacaBar fakeBar = new TradingService.AlpacaBar(110, 110, 110, 110);
         TradingService.AlpacaBarsResponse fakeBarsResponse = new TradingService.AlpacaBarsResponse();
@@ -95,7 +98,6 @@ class TradingServiceTest {
         spyTradingService.executeStrategy();
 
         // --- ASSERT ---
-        // Verify that the buy order was placed
         verify(restTemplate, times(1)).postForObject(contains("/v2/orders"), any(HttpEntity.class), eq(String.class));
     }
 }
