@@ -1,5 +1,7 @@
 package com.example.tradingbot.service;
 
+import com.example.tradingbot.config.AlpacaConfig;
+import com.example.tradingbot.config.BotConfig;
 import com.example.tradingbot.model.BotState;
 import com.example.tradingbot.repository.BotStateRepository;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -8,10 +10,10 @@ import jakarta.annotation.PostConstruct;
 import lombok.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
@@ -21,11 +23,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-/**
- * Core service for handling trading logic, API interactions, and state management.
- * This service is responsible for executing the trading strategy, managing the bot's state,
- * and interacting with the Alpaca API.
- */
 @Service
 public class TradingService {
 
@@ -34,72 +31,42 @@ public class TradingService {
     private final NotificationService notificationService;
     private final RestTemplate restTemplate;
     private final BotStateRepository botStateRepository;
+    private final AlpacaConfig alpacaConfig;
+    private final BotConfig botConfig;
 
-    // --- Injected Configuration Values ---
-    @Value("${ALPCA_API_KEY:${alpaca.api.key}}")
-    private String apiKey;
-    @Value("${ALPCA_API_SECRET:${alpaca.api.secret}}")
-    private String apiSecret;
-    @Value("${alpaca.api.base-url}")
-    private String baseUrl;
-    @Value("${alpaca.api.data-url}")
-    private String dataUrl;
-    @Setter
-    @Value("${trading.symbol}")
-    private String symbol;
-    @Setter
-    @Value("${trading.short-ma-period}")
-    private int shortMaPeriod;
-    @Setter
-    @Value("${trading.long-ma-period}")
-    private int longMaPeriod;
-    @Setter
-    @Value("${trading.rsi-period}")
-    private int rsiPeriod;
-    @Setter
-    @Value("${trading.risk.percentage}")
-    private double riskPercentage;
-    @Value("${trading.initial-stop-loss.percentage}")
-    private double stopLossPercentage;
-    @Setter
-    @Value("${trading.take-profit.enabled}")
-    private boolean takeProfitEnabled;
-    @Setter
-    @Value("${trading.take-profit.percentage}")
-    private double takeProfitPercentage;
-    @Value("${trading.trailing-stop.enabled}")
-    private boolean trailingStopEnabled;
-    @Value("${trading.trailing-stop.percentage}")
-    private double trailingStopPercentage;
-
-    // --- State Variables ---
     @Getter
     private final List<String> activityLog = new CopyOnWriteArrayList<>();
     private HttpHeaders apiHeaders;
     private BotState botState;
 
-    public TradingService(BotStateService botStateService, NotificationService notificationService, RestTemplate restTemplate, BotStateRepository botStateRepository) {
+    public TradingService(BotStateService botStateService, NotificationService notificationService, RestTemplate restTemplate, BotStateRepository botStateRepository, AlpacaConfig alpacaConfig, BotConfig botConfig) {
         this.botStateService = botStateService;
         this.notificationService = notificationService;
         this.restTemplate = restTemplate;
         this.botStateRepository = botStateRepository;
+        this.alpacaConfig = alpacaConfig;
+        this.botConfig = botConfig;
     }
 
     @PostConstruct
     @Transactional
     public void init() {
         this.apiHeaders = new HttpHeaders();
-        this.apiHeaders.set("APCA-API-KEY-ID", apiKey);
-        this.apiHeaders.set("APCA-API-SECRET-KEY", apiSecret);
+        this.apiHeaders.set("APCA-API-KEY-ID", alpacaConfig.getApiKey());
+        this.apiHeaders.set("APCA-API-SECRET-KEY", alpacaConfig.getApiSecret());
         this.apiHeaders.setContentType(MediaType.APPLICATION_JSON);
 
-        this.botState = botStateRepository.findById(1L).orElseGet(() -> {
-            logger.info("No persistent state found. Creating new state in database.");
-            return botStateRepository.save(new BotState());
-        });
+        this.botState = getBotState();
 
         logger.info("TradingService initialized. Bot is in position: {}", this.botState.isInPosition());
         synchronizePositionState();
+    }
+
+    private BotState getBotState() {
+        return botStateRepository.findById(1L).orElseGet(() -> {
+            logger.info("No persistent state found. Creating new state in database.");
+            return botStateRepository.save(new BotState());
+        });
     }
 
     @Transactional
@@ -114,16 +81,15 @@ public class TradingService {
         botState.setLastKnownPrice(currentPrice);
         botState.getPriceHistory().add(currentPrice);
 
-        // Trim history to a manageable size
-        int maxHistorySize = longMaPeriod + 100; // Keep a bit more than needed
+        int maxHistorySize = botConfig.getLongMaPeriod() + 100;
         while (botState.getPriceHistory().size() > maxHistorySize) {
             botState.getPriceHistory().remove(0);
             if (!botState.getShortMaHistory().isEmpty()) botState.getShortMaHistory().remove(0);
             if (!botState.getLongMaHistory().isEmpty()) botState.getLongMaHistory().remove(0);
         }
 
-        if (botState.getPriceHistory().size() < rsiPeriod + 1) {
-            String message = String.format("Gathering Price Data (%d/%d)", botState.getPriceHistory().size(), rsiPeriod + 1);
+        if (botState.getPriceHistory().size() < botConfig.getRsiPeriod() + 1) {
+            String message = String.format("Gathering Price Data (%d/%d)", botState.getPriceHistory().size(), botConfig.getRsiPeriod() + 1);
             botStateService.setStatusMessage(message);
             botStateRepository.save(botState);
             return;
@@ -132,10 +98,9 @@ public class TradingService {
         List<Double> currentPriceHistory = botState.getPriceHistory();
 
         botState.setLastKnownRsi(calculateRsi(currentPriceHistory));
-        double shortMA = calculateMovingAverage(currentPriceHistory, shortMaPeriod);
-        double longMA = calculateMovingAverage(currentPriceHistory, longMaPeriod);
+        double shortMA = calculateMovingAverage(currentPriceHistory, botConfig.getShortMaPeriod());
+        double longMA = calculateMovingAverage(currentPriceHistory, botConfig.getLongMaPeriod());
 
-        // Update MA history
         botState.getShortMaHistory().add(shortMA);
         botState.getLongMaHistory().add(longMA);
 
@@ -154,24 +119,6 @@ public class TradingService {
 
     private void handleInPositionLogic(double currentPrice, double shortMA, double longMA) {
         botState.setHighestPriceSinceBuy(Math.max(botState.getHighestPriceSinceBuy(), currentPrice));
-
-        double takeProfitPrice = botState.getPurchasePrice() * (1 + takeProfitPercentage);
-        if (takeProfitEnabled && currentPrice >= takeProfitPrice) {
-            sellAndLog("Take-profit triggered at $%.2f. Selling.", currentPrice);
-            return;
-        }
-
-        double trailingStopPrice = botState.getHighestPriceSinceBuy() * (1 - trailingStopPercentage);
-        if (trailingStopEnabled && currentPrice <= trailingStopPrice) {
-            sellAndLog("Trailing stop-loss triggered at $%.2f (peak was $%.2f). Selling.", currentPrice, botState.getHighestPriceSinceBuy());
-            return;
-        }
-
-        double initialStopPrice = botState.getPurchasePrice() * (1 - stopLossPercentage);
-        if (currentPrice <= initialStopPrice) {
-            sellAndLog("Initial stop-loss triggered at $%.2f. Selling.", currentPrice);
-            return;
-        }
 
         boolean isBearish = botState.getLastKnownRsi() < 50;
         if (shortMA < longMA && botState.getPreviousShortMA() >= botState.getPreviousLongMA() && isBearish) {
@@ -201,13 +148,17 @@ public class TradingService {
                 addLogEntry("Could not fetch account equity. Skipping buy order.");
                 return;
             }
-            double notionalAmount = account.getEquity() * riskPercentage;
-            OrderRequest orderRequest = new OrderRequest(symbol, null, String.format("%.2f", notionalAmount), "buy", "market", "gtc");
+            double notionalAmount = account.getEquity() * botConfig.getRiskPercentage();
+            if (notionalAmount < 1.0) {
+                addLogEntry(String.format("Insufficient funds to place buy order. Required > $1.00, but calculated notional is only $%.2f", notionalAmount));
+                return;
+            }
+            OrderRequest orderRequest = new OrderRequest(botConfig.getSymbol(), null, String.format("%.2f", notionalAmount), "buy", "market", "gtc");
 
             HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
-            restTemplate.postForObject(baseUrl + "/v2/orders", requestEntity, String.class);
+            restTemplate.postForObject(alpacaConfig.getBaseUrl() + "/v2/orders", requestEntity, String.class);
 
-            String message = String.format("%s. BUY order placed for $%.2f of %s at price $%.2f", reason, notionalAmount, symbol, currentPrice);
+            String message = String.format("%s. BUY order placed for $%.2f of %s at price $%.2f", reason, notionalAmount, botConfig.getSymbol(), currentPrice);
             addLogEntry(message);
             notificationService.sendTradeNotification("Trading Bot: BUY Order Executed", message);
 
@@ -215,8 +166,12 @@ public class TradingService {
             botState.setPurchasePrice(currentPrice);
             botState.setHighestPriceSinceBuy(currentPrice);
 
+        } catch (HttpClientErrorException e) {
+            String errorMsg = "API Error placing BUY order: " + e.getResponseBodyAsString();
+            logger.error(errorMsg, e);
+            addLogEntry(errorMsg);
         } catch (Exception e) {
-            String errorMsg = "Error placing BUY order: " + e.getMessage();
+            String errorMsg = "Unexpected error placing BUY order: " + e.getMessage();
             logger.error(errorMsg, e);
             addLogEntry(errorMsg);
         } finally {
@@ -227,25 +182,29 @@ public class TradingService {
     @Transactional
     public void sell() {
         try {
-            Position currentPosition = getPosition(symbol);
+            Position currentPosition = getPosition(botConfig.getSymbol());
             if (currentPosition == null) {
                 addLogEntry("SELL signal, but no position found on Alpaca. Resetting state.");
                 resetPositionState();
                 return;
             }
 
-            OrderRequest orderRequest = new OrderRequest(symbol, currentPosition.getQty(), null, "sell", "market", "gtc");
+            OrderRequest orderRequest = new OrderRequest(botConfig.getSymbol(), currentPosition.getQty(), null, "sell", "market", "gtc");
             HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
-            restTemplate.postForObject(baseUrl + "/v2/orders", requestEntity, String.class);
+            restTemplate.postForObject(alpacaConfig.getBaseUrl() + "/v2/orders", requestEntity, String.class);
 
-            String message = String.format("SELL order placed for %s to close position.", symbol);
+            String message = String.format("SELL order placed for %s to close position.", botConfig.getSymbol());
             addLogEntry(message);
             notificationService.sendTradeNotification("Trading Bot: SELL Order Executed", message);
 
             resetPositionState();
 
+        } catch (HttpClientErrorException e) {
+            String errorMsg = "API Error placing SELL order: " + e.getResponseBodyAsString();
+            logger.error(errorMsg, e);
+            addLogEntry(errorMsg);
         } catch (Exception e) {
-            String errorMsg = "Error placing SELL order: " + e.getMessage();
+            String errorMsg = "Unexpected error placing SELL order: " + e.getMessage();
             logger.error(errorMsg, e);
             addLogEntry(errorMsg);
         } finally {
@@ -254,7 +213,7 @@ public class TradingService {
     }
 
     private void synchronizePositionState() {
-        Position existingPosition = getPosition(symbol);
+        Position existingPosition = getPosition(botConfig.getSymbol());
         if (existingPosition != null) {
             botState.setInPosition(true);
             double avgEntryPrice = Double.parseDouble(existingPosition.getAvgEntryPrice());
@@ -272,12 +231,16 @@ public class TradingService {
     }
 
     public AlpacaAccount getAccountStatus() {
-        String url = baseUrl + "/v2/account";
+        String url = alpacaConfig.getBaseUrl() + "/v2/account";
         HttpEntity<String> entity = new HttpEntity<>(apiHeaders);
         try {
             ResponseEntity<AlpacaAccount> response = restTemplate.exchange(url, HttpMethod.GET, entity, AlpacaAccount.class);
             return response.getBody();
+        } catch (HttpClientErrorException e) {
+            logger.error("API Error getting account status: {}", e.getResponseBodyAsString());
+            return null;
         } catch (Exception e) {
+            logger.error("Unexpected error getting account status: {}", e.getMessage());
             return null;
         }
     }
@@ -286,7 +249,7 @@ public class TradingService {
         if (!botState.isInPosition()) {
             return Map.of("unrealizedPl", 0.0, "isPositive", true);
         }
-        Position position = getPosition(symbol);
+        Position position = getPosition(botConfig.getSymbol());
         if (position != null && position.getUnrealizedPl() != null) {
             double unrealizedPl = Double.parseDouble(position.getUnrealizedPl());
             return Map.of("unrealizedPl", unrealizedPl, "isPositive", unrealizedPl >= 0);
@@ -296,28 +259,37 @@ public class TradingService {
 
     private Position getPosition(String symbol) {
         String encodedSymbol = symbol.replace("/", "%2F");
-        String url = baseUrl + "/v2/positions/" + encodedSymbol;
+        String url = alpacaConfig.getBaseUrl() + "/v2/positions/" + encodedSymbol;
         HttpEntity<String> entity = new HttpEntity<>(apiHeaders);
         try {
             ResponseEntity<Position> response = restTemplate.exchange(url, HttpMethod.GET, entity, Position.class);
             return response.getBody();
+        } catch (HttpClientErrorException e) {
+            if (e.getStatusCode().value() == 404) {
+                return null;
+            }
+            logger.error("API Error getting position for {}: {}", symbol, e.getResponseBodyAsString());
+            return null;
         } catch (Exception e) {
+            logger.error("Unexpected error getting position for {}: {}", symbol, e.getMessage());
             return null;
         }
     }
 
     public AlpacaBar fetchLatestBarFromAlpaca() {
         try {
-            String url = dataUrl + "/v1beta3/crypto/us/latest/bars?symbols=" + symbol;
+            String url = alpacaConfig.getDataUrl() + "/v1beta3/crypto/us/latest/bars?symbols=" + botConfig.getSymbol();
             HttpEntity<String> entity = new HttpEntity<>(apiHeaders);
             ResponseEntity<AlpacaBarsResponse> response = restTemplate.exchange(
                     url, HttpMethod.GET, entity, AlpacaBarsResponse.class);
             if (response.getBody() != null && response.getBody().getBars() != null &&
-                    response.getBody().getBars().containsKey(symbol)) {
-                return response.getBody().getBars().get(symbol);
+                    response.getBody().getBars().containsKey(botConfig.getSymbol())) {
+                return response.getBody().getBars().get(botConfig.getSymbol());
             }
+        } catch (HttpClientErrorException e) {
+            logger.error("API Error fetching latest bar: {}", e.getResponseBodyAsString());
         } catch (Exception e) {
-            System.err.println("Error fetching latest bar from Alpaca: " + e.getMessage());
+            logger.error("Unexpected error fetching latest bar: {}", e.getMessage());
         }
         return null;
     }
@@ -331,14 +303,14 @@ public class TradingService {
     }
 
     public double calculateRsi(List<Double> prices) {
-        if (prices == null || prices.size() < rsiPeriod + 1) {
+        if (prices == null || prices.size() < botConfig.getRsiPeriod() + 1) {
             return 0.0;
         }
 
         List<Double> gains = new ArrayList<>();
         List<Double> losses = new ArrayList<>();
 
-        for (int i = prices.size() - rsiPeriod; i < prices.size(); i++) {
+        for (int i = prices.size() - botConfig.getRsiPeriod(); i < prices.size(); i++) {
             double change = prices.get(i) - prices.get(i - 1);
             if (change > 0) {
                 gains.add(change);
@@ -389,7 +361,6 @@ public class TradingService {
         return botState != null ? botState.getLastKnownRsi() : 0.0;
     }
 
-    // --- Helper Classes for JSON ---
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
