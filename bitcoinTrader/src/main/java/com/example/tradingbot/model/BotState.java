@@ -61,4 +61,20 @@ public class BotState {
     @CollectionTable(name = "price_history", joinColumns = @JoinColumn(name = "bot_state_id"))
     @Column(name = "price")
     private List<Double> priceHistory = new ArrayList<>();
+
+    /**
+     * A list of recent short moving average values for charting.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "short_ma_history", joinColumns = @JoinColumn(name = "bot_state_id"))
+    @Column(name = "short_ma")
+    private List<Double> shortMaHistory = new ArrayList<>();
+
+    /**
+     * A list of recent long moving average values for charting.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "long_ma_history", joinColumns = @JoinColumn(name = "bot_state_id"))
+    @Column(name = "long_ma")
+    private List<Double> longMaHistory = new ArrayList<>();
 }

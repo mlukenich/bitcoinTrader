@@ -114,8 +114,12 @@ public class TradingService {
         botState.setLastKnownPrice(currentPrice);
         botState.getPriceHistory().add(currentPrice);
 
-        while (botState.getPriceHistory().size() > longMaPeriod + 1) {
+        // Trim history to a manageable size
+        int maxHistorySize = longMaPeriod + 100; // Keep a bit more than needed
+        while (botState.getPriceHistory().size() > maxHistorySize) {
             botState.getPriceHistory().remove(0);
+            if (!botState.getShortMaHistory().isEmpty()) botState.getShortMaHistory().remove(0);
+            if (!botState.getLongMaHistory().isEmpty()) botState.getLongMaHistory().remove(0);
         }
 
         if (botState.getPriceHistory().size() < rsiPeriod + 1) {
@@ -130,6 +134,10 @@ public class TradingService {
         botState.setLastKnownRsi(calculateRsi(currentPriceHistory));
         double shortMA = calculateMovingAverage(currentPriceHistory, shortMaPeriod);
         double longMA = calculateMovingAverage(currentPriceHistory, longMaPeriod);
+
+        // Update MA history
+        botState.getShortMaHistory().add(shortMA);
+        botState.getLongMaHistory().add(longMA);
 
         botStateService.setStatusMessage(String.format("Monitoring | RSI: %.2f", botState.getLastKnownRsi()));
 
@@ -174,8 +182,7 @@ public class TradingService {
     private void handleNotInPositionLogic(double currentPrice, double shortMA, double longMA) {
         boolean isBullish = botState.getLastKnownRsi() > 50;
         if (shortMA > longMA && botState.getPreviousShortMA() <= botState.getPreviousLongMA() && isBullish) {
-            addLogEntry("MA Crossover and Bullish RSI detected. Placing BUY order.");
-            buy(currentPrice);
+            buy(currentPrice, "MA Crossover and Bullish RSI detected");
         }
     }
 
@@ -187,7 +194,7 @@ public class TradingService {
     }
 
     @Transactional
-    public void buy(double currentPrice) {
+    public void buy(double currentPrice, String reason) {
         try {
             AlpacaAccount account = getAccountStatus();
             if (account == null) {
@@ -200,7 +207,7 @@ public class TradingService {
             HttpEntity<OrderRequest> requestEntity = new HttpEntity<>(orderRequest, apiHeaders);
             restTemplate.postForObject(baseUrl + "/v2/orders", requestEntity, String.class);
 
-            String message = String.format("BUY order placed for $%.2f of %s at price $%.2f", notionalAmount, symbol, currentPrice);
+            String message = String.format("%s. BUY order placed for $%.2f of %s at price $%.2f", reason, notionalAmount, symbol, currentPrice);
             addLogEntry(message);
             notificationService.sendTradeNotification("Trading Bot: BUY Order Executed", message);
 
@@ -363,34 +370,14 @@ public class TradingService {
 
     public Map<String, List<?>> getChartData() {
         int chartHistorySize = 100;
-        List<Double> fullPriceHistory = this.botState.getPriceHistory();
-
-        if (fullPriceHistory.isEmpty()) {
-            return Map.of("prices", List.of(), "shortMas", List.of(), "longMas", List.of());
-        }
-
-        List<Double> pricesForChart = fullPriceHistory.subList(
-                Math.max(0, fullPriceHistory.size() - chartHistorySize),
-                fullPriceHistory.size()
-        );
-
-        List<Double> shortMasForChart = new ArrayList<>();
-        List<Double> longMasForChart = new ArrayList<>();
-
-        for (int i = 0; i < pricesForChart.size(); i++) {
-            int historyIndex = Math.max(0, fullPriceHistory.size() - pricesForChart.size()) + i;
-
-            List<Double> subForShort = fullPriceHistory.subList(Math.max(0, historyIndex - shortMaPeriod + 1), historyIndex + 1);
-            shortMasForChart.add(calculateMovingAverage(subForShort, shortMaPeriod));
-
-            List<Double> subForLong = fullPriceHistory.subList(Math.max(0, historyIndex - longMaPeriod + 1), historyIndex + 1);
-            longMasForChart.add(calculateMovingAverage(subForLong, longMaPeriod));
-        }
+        List<Double> prices = botState.getPriceHistory();
+        List<Double> shortMas = botState.getShortMaHistory();
+        List<Double> longMas = botState.getLongMaHistory();
 
         return Map.of(
-                "prices", pricesForChart,
-                "shortMas", shortMasForChart,
-                "longMas", longMasForChart
+                "prices", prices.subList(Math.max(0, prices.size() - chartHistorySize), prices.size()),
+                "shortMas", shortMas.subList(Math.max(0, shortMas.size() - chartHistorySize), shortMas.size()),
+                "longMas", longMas.subList(Math.max(0, longMas.size() - chartHistorySize), longMas.size())
         );
     }
 
