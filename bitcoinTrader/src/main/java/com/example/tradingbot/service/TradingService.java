@@ -7,6 +7,7 @@ import com.example.tradingbot.repository.BotStateRepository;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,9 +58,15 @@ public class TradingService {
         this.apiHeaders.setContentType(MediaType.APPLICATION_JSON);
 
         this.botState = getBotState();
-
+        addLogEntry("Trading bot started.");
         logger.info("TradingService initialized. Bot is in position: {}", this.botState.isInPosition());
         synchronizePositionState();
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        addLogEntry("Trading bot stopped.");
+        logger.info("Trading bot is shutting down.");
     }
 
     private BotState getBotState() {
