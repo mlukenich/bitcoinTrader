@@ -7,6 +7,7 @@ import com.example.tradingbot.repository.BotStateRepository;
 import com.example.tradingbot.service.BotStateService;
 import com.example.tradingbot.service.NotificationService;
 import com.example.tradingbot.service.TradingService;
+import com.example.tradingbot.service.WebSocketService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -48,6 +49,8 @@ class TradingServiceTest {
     private AlpacaConfig alpacaConfig;
     @Mock
     private BotConfig botConfig;
+    @Mock
+    private WebSocketService webSocketService;
 
     @InjectMocks
     private TradingService tradingService;

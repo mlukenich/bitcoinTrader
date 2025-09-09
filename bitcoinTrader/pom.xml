@@ -24,6 +24,12 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!-- WebSocket for real-time communication -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+        </dependency>
+
         <!-- For sending email notifications -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -97,10 +103,3 @@
     </build>
 
 </project>
-
-
-
-
-
-
-

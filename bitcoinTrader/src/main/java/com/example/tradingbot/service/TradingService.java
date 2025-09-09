@@ -34,19 +34,21 @@ public class TradingService {
     private final BotStateRepository botStateRepository;
     private final AlpacaConfig alpacaConfig;
     private final BotConfig botConfig;
+    private final WebSocketService webSocketService;
 
     @Getter
     private final List<String> activityLog = new CopyOnWriteArrayList<>();
     private HttpHeaders apiHeaders;
     private BotState botState;
 
-    public TradingService(BotStateService botStateService, NotificationService notificationService, RestTemplate restTemplate, BotStateRepository botStateRepository, AlpacaConfig alpacaConfig, BotConfig botConfig) {
+    public TradingService(BotStateService botStateService, NotificationService notificationService, RestTemplate restTemplate, BotStateRepository botStateRepository, AlpacaConfig alpacaConfig, BotConfig botConfig, WebSocketService webSocketService) {
         this.botStateService = botStateService;
         this.notificationService = notificationService;
         this.restTemplate = restTemplate;
         this.botStateRepository = botStateRepository;
         this.alpacaConfig = alpacaConfig;
         this.botConfig = botConfig;
+        this.webSocketService = webSocketService;
     }
 
     @PostConstruct
@@ -61,12 +63,14 @@ public class TradingService {
         addLogEntry("Trading bot started.");
         logger.info("TradingService initialized. Bot is in position: {}", this.botState.isInPosition());
         synchronizePositionState();
+        broadcastFullUpdate();
     }
 
     @PreDestroy
     public void shutdown() {
         addLogEntry("Trading bot stopped.");
         logger.info("Trading bot is shutting down.");
+        broadcastFullUpdate();
     }
 
     private BotState getBotState() {
@@ -81,6 +85,7 @@ public class TradingService {
         AlpacaBar latestBar = fetchLatestBarFromAlpaca();
         if (latestBar == null) {
             botStateService.setStatusMessage("Could not fetch price data...");
+            broadcastFullUpdate();
             return;
         }
 
@@ -99,6 +104,7 @@ public class TradingService {
             String message = String.format("Gathering Price Data (%d/%d)", botState.getPriceHistory().size(), botConfig.getRsiPeriod() + 1);
             botStateService.setStatusMessage(message);
             botStateRepository.save(botState);
+            broadcastFullUpdate();
             return;
         }
 
@@ -122,6 +128,7 @@ public class TradingService {
         botState.setPreviousShortMA(shortMA);
         botState.setPreviousLongMA(longMA);
         botStateRepository.save(botState);
+        broadcastFullUpdate();
     }
 
     private void handleInPositionLogic(double currentPrice, double shortMA, double longMA) {
@@ -183,6 +190,7 @@ public class TradingService {
             addLogEntry(errorMsg);
         } finally {
             botStateRepository.save(botState);
+            broadcastFullUpdate();
         }
     }
 
@@ -216,6 +224,7 @@ public class TradingService {
             addLogEntry(errorMsg);
         } finally {
             botStateRepository.save(botState);
+            broadcastFullUpdate();
         }
     }
 
@@ -345,6 +354,23 @@ public class TradingService {
         while (activityLog.size() > 20) {
             activityLog.remove(activityLog.size() - 1);
         }
+        broadcastFullUpdate();
+    }
+
+    public Map<String, Object> getFullUpdate() {
+        return Map.of(
+                "lastKnownPrice", getLastKnownPrice(),
+                "lastKnownRsi", getLastKnownRsi(),
+                "inPosition", botState.isInPosition(),
+                "statusMessage", botStateService.getStatus() != null ? botStateService.getStatus() : "",
+                "activityLog", getActivityLog(),
+                "chartData", getChartData(),
+                "pl", getBtcPositionPl()
+        );
+    }
+
+    private void broadcastFullUpdate() {
+        webSocketService.sendUpdate(getFullUpdate());
     }
 
     public Map<String, List<?>> getChartData() {

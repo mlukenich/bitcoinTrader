@@ -2,256 +2,169 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bitcoin Trader Dashboard</title>
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <title>Trading Bot</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.7; }
-        }
-        .animate-pulse-running {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-    </style>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
 </head>
-<body class="bg-slate-900 flex items-center justify-center min-h-screen font-sans">
+<body class="bg-gray-900 text-gray-200 font-sans">
 
-<div class="w-full max-w-4xl bg-slate-800 rounded-2xl shadow-lg p-8">
+<div class="container mx-auto p-4 md:p-8">
+    <h1 class="text-3xl font-bold mb-6 text-cyan-400">Trading Bot Dashboard</h1>
 
-    <div class="flex flex-col items-center mb-6 text-center">
-        <svg class="w-16 h-16 text-blue-500 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />
-        </svg>
-        <h1 class="text-3xl font-bold text-slate-100">Bitcoin Trading Bot</h1>
-        <p class="text-slate-400">Control Panel</p>
-    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
 
-    <div class="text-center border-b border-slate-700 pb-6 mb-6">
-        <h2 class="text-xl font-bold text-slate-200 mb-2">Account Status</h2>
-        <div class="flex justify-center items-center space-x-6">
-            <div>
-                <p class="text-lg text-slate-400">Equity</p>
-                <p id="account-equity" class="text-3xl font-bold text-slate-100">---</p>
-            </div>
-            <div>
-                <p class="text-lg text-slate-400">Position P/L</p>
-                <p id="account-gain-loss" class="text-3xl font-bold text-slate-100">---</p>
+        <!-- Left Column -->
+        <div class="md:col-span-2 bg-gray-800 rounded-lg shadow-lg p-6">
+            <h2 class="text-xl font-semibold mb-4 border-b border-gray-700 pb-2">Bot Status</h2>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div>
+                    <span class="text-sm text-gray-400">Status</span>
+                    <p id="status" class="text-lg font-bold text-yellow-400">-</p>
+                </div>
+                <div>
+                    <span class="text-sm text-gray-400">Position</span>
+                    <p id="position" class="text-lg font-bold">-</p>
+                </div>
+                <div>
+                    <span class="text-sm text-gray-400">Entry Price</span>
+                    <p id="entryPrice" class="text-lg font-bold">-</p>
+                </div>
+                <div>
+                    <span class="text-sm text-gray-400">Current Price</span>
+                    <p id="currentPrice" class="text-lg font-bold">-</p>
+                </div>
             </div>
         </div>
-    </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-
-        <div class="lg:col-span-2 bg-slate-900/50 p-4 rounded-lg">
-            <h2 class="text-xl font-bold text-slate-200 mb-4 text-center">Price Chart</h2>
-            <canvas id="priceChart"></canvas>
+        <!-- Right Column -->
+        <div class="bg-gray-800 rounded-lg shadow-lg p-6">
+            <h2 class="text-xl font-semibold mb-4 border-b border-gray-700 pb-2">Account Status</h2>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <span class="text-sm text-gray-400">Equity</span>
+                    <p id="equity" class="text-lg font-bold">-</p>
+                </div>
+                <div>
+                    <span class="text-sm text-gray-400">Unrealized P/L</span>
+                    <p id="unrealizedPL" class="text-lg font-bold">-</p>
+                </div>
+            </div>
+            <div class="mt-6 flex space-x-4">
+                <button id="startButton" onclick="startBot()"
+                        class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed">
+                    <span class="button-text">Start</span>
+                    <span class="spinner hidden animate-spin-fast">◐</span>
+                </button>
+                <button id="stopButton" onclick="stopBot()"
+                        class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed">
+                    <span class="button-text">Stop</span>
+                    <span class="spinner hidden animate-spin-fast">◐</span>
+                </button>
+            </div>
         </div>
 
-        <div class="space-y-4">
-            <div class="text-center p-4 rounded-lg bg-slate-900/50">
-                <div class="mb-4">
-                    <p class="text-lg text-slate-400">Current BTC Price</p>
-                    <p id="current-price" class="text-2xl font-bold text-slate-100">---</p>
-                </div>
-                <div class="mb-4">
-                    <p class="text-md text-slate-400">RSI (14)</p>
-                    <p id="current-rsi" class="text-xl font-semibold text-slate-200">---</p>
-                </div>
-                <div id="status-container" class="mb-4 p-4 rounded-lg transition-colors duration-300">
-                    <p id="status-text" class="text-lg font-semibold">Checking status...</p>
-                </div>
-                <div class="flex justify-center space-x-4">
-                    <button id="startBtn" class="w-full bg-green-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-700">Start</button>
-                    <button id="stopBtn" class="w-full bg-red-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-700">Stop</button>
-                </div>
-                <p id="response" class="mt-4 text-slate-400 min-h-[20px]"></p>
-            </div>
-            <div class="bg-slate-900/50 p-4 rounded-lg h-80 overflow-y-auto">
-                <h2 class="text-xl font-bold text-slate-200 mb-4 text-center">Recent Activity</h2>
-                <div id="activity-log" class="space-y-2 text-sm text-slate-400"></div>
+        <!-- Log Area -->
+        <div class="md:col-span-3 bg-gray-800 rounded-lg shadow-lg p-6">
+            <h2 class="text-xl font-semibold mb-4">Recent Activity</h2>
+            <div id="logs" class="h-64 overflow-y-auto bg-gray-900 rounded-md p-4 text-sm font-mono">
+                <!-- Logs will be dynamically inserted here -->
             </div>
         </div>
     </div>
 </div>
 
 <script>
-    const statusContainer = document.getElementById('status-container');
-    const statusText = document.getElementById('status-text');
-    const responseP = document.getElementById('response');
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const activityLog = document.getElementById('activity-log');
-    const currentPriceText = document.getElementById('current-price');
-    const currentRsiText = document.getElementById('current-rsi');
-    const accountEquityText = document.getElementById('account-equity');
-    const accountGainLossText = document.getElementById('account-gain-loss');
-    const ctx = document.getElementById('priceChart');
-    let priceChart;
+    const statusEl = document.getElementById('status');
+    const positionEl = document.getElementById('position');
+    const entryPriceEl = document.getElementById('entryPrice');
+    const currentPriceEl = document.getElementById('currentPrice');
+    const equityEl = document.getElementById('equity');
+    const unrealizedPLEl = document.getElementById('unrealizedPL');
+    const logsEl = document.getElementById('logs');
+    const startButton = document.getElementById('startButton');
+    const stopButton = document.getElementById('stopButton');
 
-    function initializeChart() {
-        priceChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [{
-                    label: 'Price', data: [], borderColor: 'rgb(59, 130, 246)', tension: 0.1, pointRadius: 0
-                }, {
-                    label: 'Short MA', data: [], borderColor: 'rgb(250, 204, 21)', borderDash: [5, 5], tension: 0.1, pointRadius: 0
-                }, {
-                    label: 'Long MA', data: [], borderColor: 'rgb(239, 68, 68)', tension: 0.1, pointRadius: 0
-                }]
-            },
-            options: {
-                scales: {
-                    y: { ticks: { color: '#94a3b8' } },
-                    x: { ticks: { color: '#94a3b8', display: false } }
-                },
-                plugins: {
-                    legend: { labels: { color: '#cbd5e1' } }
-                },
-                animation: { duration: 0 }
-            }
+    function connect() {
+        const socket = new WebSocket('ws://localhost:8080/ws');
+        const stompClient = Stomp.over(socket);
+
+        stompClient.connect({}, function (frame) {
+            console.log('Connected: ' + frame);
+            addLogEntry('UI connected to server.', 'text-cyan-400');
+            stompClient.subscribe('/topic/updates', function (message) {
+                updateDashboard(JSON.parse(message.body));
+            });
+            // Request initial state after connection
+            fetch('/api/state')
+                .then(response => response.json())
+                .then(updateDashboard);
+        }, function(error) {
+            console.error('STOMP error', error);
+            addLogEntry('Connection lost. Attempting to reconnect...', 'text-red-500');
+            setTimeout(connect, 5000); // Reconnect after 5 seconds
         });
     }
 
-    async function updateChart() {
-        try {
-            const response = await fetch('/api/chart-data');
-            const data = await response.json();
-            if (priceChart && data.prices) {
-                priceChart.data.labels = Array.from(Array(data.prices.length).keys());
-                priceChart.data.datasets[0].data = data.prices;
-                priceChart.data.datasets[1].data = data.shortMas;
-                priceChart.data.datasets[2].data = data.longMas;
-                priceChart.update('none');
-            }
-        } catch (error) { console.error("Error fetching chart data:", error); }
-    }
+    function updateDashboard(state) {
+        statusEl.textContent = state.running ? 'Running' : 'Stopped';
+        statusEl.className = `text-lg font-bold ${state.running ? 'text-green-400' : 'text-red-400'}`;
 
-    function setStatus(state, message) {
-        statusText.textContent = message;
-        statusContainer.classList.remove('bg-slate-600', 'bg-green-500/20', 'text-green-300', 'bg-red-500/20', 'text-red-300', 'animate-pulse-running');
-        if (state === 'RUNNING') {
-            statusContainer.classList.add('bg-green-500/20', 'text-green-300', 'animate-pulse-running');
-        } else if (state === 'STOPPED') {
-            statusContainer.classList.add('bg-red-500/20', 'text-red-300');
+        positionEl.textContent = state.position.positionType || 'None';
+        entryPriceEl.textContent = state.position.entryPrice ? `$${state.position.entryPrice.toFixed(2)}` : '-';
+        currentPriceEl.textContent = state.currentPrice ? `$${state.currentPrice.toFixed(2)}` : '-';
+        equityEl.textContent = state.equity ? `$${state.equity.toFixed(2)}` : '-';
+
+        const pl = state.unrealizedPL || 0;
+        unrealizedPLEl.textContent = `$${pl.toFixed(2)}`;
+        if (pl >= 0) {
+            unrealizedPLEl.className = 'text-lg font-bold text-green-400';
         } else {
-            statusContainer.classList.add('bg-slate-600');
+            unrealizedPLEl.className = 'text-lg font-bold text-red-400';
+        }
+
+        if (state.logs) {
+            logsEl.innerHTML = ''; // Clear existing logs
+            state.logs.forEach(log => addLogEntry(log.message, '', log.timestamp));
         }
     }
 
-    async function updateStatus() {
-        try {
-            const response = await fetch('/status');
-            if (!response.ok) throw new Error('Server not reachable');
-            const text = await response.text();
-            if (text.toLowerCase().includes('running') || text.toLowerCase().includes('gathering') || text.toLowerCase().includes('monitoring')) {
-                setStatus('RUNNING', text);
-            } else {
-                setStatus('STOPPED', text);
-            }
-        } catch (error) {
-            setStatus('ERROR', 'Error: Could not connect to the server.');
+    function addLogEntry(message, styleClass = '', timestamp) {
+        const logEntry = document.createElement('div');
+        const timeString = timestamp ? new Date(timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+        logEntry.innerHTML = `<span class="text-gray-500">[${timeString}]</span> <span class="${styleClass}">${message}</span>`;
+        logsEl.appendChild(logEntry);
+        logsEl.scrollTop = logsEl.scrollHeight; // Auto-scroll to bottom
+    }
+
+    function startBot() {
+        setButtonState(startButton, true);
+        fetch('/api/start', { method: 'POST' })
+            .finally(() => setButtonState(startButton, false));
+    }
+
+    function stopBot() {
+        setButtonState(stopButton, true);
+        fetch('/api/stop', { method: 'POST' })
+            .finally(() => setButtonState(stopButton, false));
+    }
+
+    function setButtonState(button, isLoading) {
+        const text = button.querySelector('.button-text');
+        const spinner = button.querySelector('.spinner');
+        if (isLoading) {
+            button.disabled = true;
+            text.classList.add('hidden');
+            spinner.classList.remove('hidden');
+        } else {
+            button.disabled = false;
+            text.classList.remove('hidden');
+            spinner.classList.add('hidden');
         }
     }
 
-    async function updateActivityLog() {
-        try {
-            const response = await fetch('/api/activity');
-            if (!response.ok) return;
-            const logEntries = await response.json();
-            activityLog.innerHTML = '';
-            if (logEntries.length === 0) {
-                activityLog.innerHTML = '<p>No activity yet...</p>';
-                return;
-            }
-            logEntries.forEach(entry => {
-                const p = document.createElement('p');
-                p.textContent = entry;
-                p.className = 'border-b border-slate-700 pb-1';
-                activityLog.appendChild(p);
-            });
-        } catch (error) {}
-    }
+    // Initial connection
+    connect();
 
-    async function updatePrice() {
-        try {
-            const response = await fetch('/price');
-            if (!response.ok) {
-                currentPriceText.textContent = 'Error';
-                currentRsiText.textContent = 'Error';
-                return;
-            };
-            const data = await response.json();
-            if (data.price > 0) {
-                currentPriceText.textContent = data.formattedPrice;
-            } else {
-                currentPriceText.textContent = '---';
-            }
-            if (data.rsi > 0) {
-                currentRsiText.textContent = data.formattedRsi;
-            } else {
-                currentRsiText.textContent = '---';
-            }
-        } catch (error) {
-            currentPriceText.textContent = 'Error';
-            currentRsiText.textContent = 'Error';
-        }
-    }
-
-    async function updateAccountInfo() {
-        try {
-            const response = await fetch('/account');
-            if (!response.ok) throw new Error('Failed to fetch account');
-            const data = await response.json();
-            if (data.equity) {
-                accountEquityText.textContent = data.equity;
-                accountGainLossText.textContent = data.positionGainLoss;
-                accountGainLossText.className = `text-3xl font-bold ${data.gainLossColor}`;
-            }
-        } catch (error) {
-            accountEquityText.textContent = 'Error';
-            accountGainLossText.textContent = 'Error';
-        }
-    }
-
-    async function sendCommand(command) {
-        try {
-            responseP.textContent = `Sending '${command}' command...`;
-            const response = await fetch(`/${command}`);
-            const text = await response.text();
-            responseP.textContent = text;
-            await updateStatus();
-        } catch (error) {
-            responseP.textContent = `Error: Could not send the '${command}' command.`;
-        }
-    }
-
-    startBtn.addEventListener('click', () => sendCommand('start'));
-    stopBtn.addEventListener('click', () => sendCommand('stop'));
-
-    document.addEventListener('DOMContentLoaded', () => {
-        initializeChart();
-        setStatus('INITIAL', 'Checking status...');
-        updateStatus();
-        updateActivityLog();
-        updatePrice();
-        updateAccountInfo();
-        updateChart();
-
-        setInterval(() => {
-            updateStatus();
-            updateActivityLog();
-            updatePrice();
-            updateAccountInfo();
-            updateChart();
-        }, 10000); // Increased polling to 10 seconds
-    });
 </script>
-
 </body>
 </html>
-
