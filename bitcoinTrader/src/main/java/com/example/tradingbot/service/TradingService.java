@@ -20,6 +20,7 @@ import org.springframework.web.client.RestTemplate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -37,7 +38,7 @@ public class TradingService {
     private final WebSocketService webSocketService;
 
     @Getter
-    private final List<String> activityLog = new CopyOnWriteArrayList<>();
+    private final List<LogEntry> activityLog = new CopyOnWriteArrayList<>();
     private HttpHeaders apiHeaders;
     private BotState botState;
 
@@ -349,8 +350,8 @@ public class TradingService {
     }
 
     public void addLogEntry(String message) {
-        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
-        activityLog.add(0, String.format("[%s] %s", timestamp, message));
+        String timestamp = LocalDateTime.now().toString();
+        activityLog.add(0, new LogEntry(timestamp, message));
         while (activityLog.size() > 20) {
             activityLog.remove(activityLog.size() - 1);
         }
@@ -358,15 +359,35 @@ public class TradingService {
     }
 
     public Map<String, Object> getFullUpdate() {
-        return Map.of(
-                "lastKnownPrice", getLastKnownPrice(),
-                "lastKnownRsi", getLastKnownRsi(),
-                "inPosition", botState.isInPosition(),
-                "statusMessage", botStateService.getStatus() != null ? botStateService.getStatus() : "",
-                "activityLog", getActivityLog(),
-                "chartData", getChartData(),
-                "pl", getBtcPositionPl()
-        );
+        Map<String, Object> update = new HashMap<>();
+
+        String status = botStateService.getStatus();
+        update.put("running", status != null && (status.equalsIgnoreCase("RUNNING") || status.equalsIgnoreCase("STARTED")));
+        update.put("statusMessage", status != null ? status : "STOPPED");
+
+        Map<String, Object> positionMap = new HashMap<>();
+        if (botState.isInPosition()) {
+            positionMap.put("positionType", "BUY");
+            positionMap.put("entryPrice", botState.getPurchasePrice());
+        } else {
+            positionMap.put("positionType", "None");
+            positionMap.put("entryPrice", 0.0);
+        }
+        update.put("position", positionMap);
+
+        update.put("currentPrice", getLastKnownPrice());
+        update.put("lastKnownRsi", getLastKnownRsi());
+        update.put("chartData", getChartData());
+
+        AlpacaAccount account = getAccountStatus();
+        update.put("equity", (account != null) ? account.getEquity() : 0.0);
+
+        Map<String, Object> plData = getBtcPositionPl();
+        update.put("unrealizedPL", plData.getOrDefault("unrealizedPl", 0.0));
+
+        update.put("logs", getActivityLog());
+
+        return update;
     }
 
     private void broadcastFullUpdate() {
@@ -392,6 +413,13 @@ public class TradingService {
 
     public double getLastKnownRsi() {
         return botState != null ? botState.getLastKnownRsi() : 0.0;
+    }
+
+    @Data
+    @AllArgsConstructor
+    public static class LogEntry {
+        private String timestamp;
+        private String message;
     }
 
     @Data

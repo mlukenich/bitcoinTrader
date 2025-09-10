@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>Trading Bot</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
 </head>
 <body class="bg-gray-900 text-gray-200 font-sans">
@@ -85,7 +86,7 @@
     const stopButton = document.getElementById('stopButton');
 
     function connect() {
-        const socket = new WebSocket('ws://localhost:8080/ws');
+        const socket = new SockJS('/ws');
         const stompClient = Stomp.over(socket);
 
         stompClient.connect({}, function (frame) {
@@ -122,9 +123,16 @@
             unrealizedPLEl.className = 'text-lg font-bold text-red-400';
         }
 
-        if (state.logs) {
+        const logs = state.logs || state.activityLog;
+        if (logs) {
             logsEl.innerHTML = ''; // Clear existing logs
-            state.logs.forEach(log => addLogEntry(log.message, '', log.timestamp));
+            logs.forEach(log => {
+                if (typeof log === 'object' && log !== null) {
+                    addLogEntry(log.message, '', log.timestamp);
+                } else {
+                    addLogEntry(log, '', null);
+                }
+            });
         }
     }
 

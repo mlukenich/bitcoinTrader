@@ -5,6 +5,7 @@ import com.example.tradingbot.service.TradingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -32,7 +33,7 @@ public class BotController {
      *
      * @return A confirmation message.
      */
-    @GetMapping("/start")
+    @PostMapping("/api/start")
     public String startBot() {
         botStateService.start();
         logger.info("Bot has been STARTED.");
@@ -45,7 +46,7 @@ public class BotController {
      *
      * @return A confirmation message.
      */
-    @GetMapping("/stop")
+    @PostMapping("/api/stop")
     public String stopBot() {
         botStateService.stop();
         logger.info("Bot has been STOPPED.");
@@ -69,7 +70,7 @@ public class BotController {
      * @return A list of log messages.
      */
     @GetMapping("/activity") //
-    public List<String> getActivity() {
+    public List<TradingService.LogEntry> getActivity() {
         return tradingService.getActivityLog();
     }
 
@@ -114,6 +115,11 @@ public class BotController {
             );
         }
         return Map.of(); // Return empty map on error
+    }
+
+    @GetMapping("/api/state")
+    public Map<String, Object> getState() {
+        return tradingService.getFullUpdate();
     }
 
     /**
